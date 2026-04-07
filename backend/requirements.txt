@@ -1,0 +1,15 @@
+# Python recomendado: 3.11 o 3.12 (evita 3.14 en Windows si hay wheels faltantes).
+# Core
+python-dotenv>=1.0.1
+
+# Base de datos — <2.10 evita pyiceberg (compilación MSVC en Windows con storage3 reciente)
+supabase>=2.8.1,<2.10.0
+
+# Visión / captura
+opencv-python>=4.9.0.80
+
+# IA — SDK oficial google-genai (<1.3 mantiene compatibilidad con httpx 0.27 de supabase<2.10)
+google-genai>=1.0.0,<1.3.0
+
+# Misma familia que exigen supabase y gotrue/postgrest
+httpx>=0.26,<0.28

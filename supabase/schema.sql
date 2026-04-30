@@ -1,4 +1,4 @@
--- SmartGuard: esquema normalizado (3 tablas) para documentación y despliegue en Supabase.
+-- SmartGuard: esquema normalizado (3 tablasS) para documentación y despliegue en Supabase.
 -- Ejecutar en SQL Editor o como migración según tu flujo.
 
 create extension if not exists "pgcrypto";

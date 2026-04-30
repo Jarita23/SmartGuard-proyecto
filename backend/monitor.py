@@ -3,7 +3,7 @@ from ultralytics import YOLO
 import requests
 import time
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓNES ---
 # Asegúrate de que api.py esté corriendo en el puerto 8000
 API_URL = "http://127.0.0.1:8000/analizar/1"
 model_obj = YOLO('yolov8n.pt')      

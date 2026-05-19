@@ -2,7 +2,7 @@
 Punto de entrada SmartGuard: carga de entorno, Observer para alertas,
 Strategy lista para enchufar Gemini u otros modelos, captura de webcam.
 """
-
+# Habilita el uso de anotaciones de tipo de forma pospuesta (necesario para versiones de Python que manejan tipos complejos)
 from __future__ import annotations
 
 import argparse

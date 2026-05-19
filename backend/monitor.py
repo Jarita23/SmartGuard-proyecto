@@ -4,7 +4,6 @@ import requests
 import time
 
 # --- CONFIGURACIÓNES ---
-# Asegúrate de que api.py esté corriendo en el puerto 8000
 API_URL = "http://127.0.0.1:8000/analizar/1"
 model_obj = YOLO('yolov8n.pt')      
 model_pose = YOLO('yolov8n-pose.pt') 
@@ -25,16 +24,29 @@ UMBRAL_ROBO = 70
 frames_presencia_memoria = 0 
 MEMORIA_POSE_GRACIA = 30     
 
+# --- NUEVAS VARIABLES DE CALENTAMIENTO ---
+FRAME_ACTUAL = 0
+FRAMES_DE_CALENTAMIENTO = 90  # ~3 segundos de espera inicial
+
 print("🛡️ SmartGuard Pro: Sistema CONECTADO a la API. Vigilancia activa.")
 
 while cap.isOpened():
     success, frame = cap.read()
     if not success: break
 
+    FRAME_ACTUAL += 1
+
+    # 1. FASE DE CALENTAMIENTO (Evita el gatillo fácil al inicio)
+    if FRAME_ACTUAL < FRAMES_DE_CALENTAMIENTO:
+        cv2.putText(frame, "CALIBRANDO SENSORES...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        cv2.imshow("SmartGuard Pro - Dashboard Link", frame)
+        cv2.waitKey(1)
+        continue  # Salta directo al siguiente frame sin analizar robos
+
     frame_buffer.append(frame.copy())
     if len(frame_buffer) > 90: frame_buffer.pop(0) 
 
-    # 1. ¿Hay alguien?
+    # 2. ¿Hay alguien?
     results_pose = model_pose(frame, stream=True, verbose=False)
     pose_detectada_este_frame = any(r.keypoints is not None and len(r.keypoints.xy) > 0 for r in results_pose)
 
@@ -45,7 +57,7 @@ while cap.isOpened():
         frames_presencia_memoria = max(0, frames_presencia_memoria - 1)
         persona_presente_suavizada = frames_presencia_memoria > 0
 
-    # 2. Rastrear y Contar
+    # 3. Rastrear y Contar
     obj_results = model_obj.track(frame, persist=True, conf=0.25, verbose=False)
     
     conteo_actual = {73: 0, "BOTELLA": 0}
@@ -78,10 +90,10 @@ while cap.isOpened():
                     objeto_visto_fuera = True
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
-    # 3. --- LÓGICA DE FALTANTES ---
+    # 4. --- LÓGICA DE FALTANTES ---
     hay_faltante = (conteo_actual[73] < stock_esperado[73]) or (conteo_actual["BOTELLA"] < stock_esperado["BOTELLA"])
 
-    # 4. --- DECISIÓN ---
+    # 5. --- DECISIÓN ---
     if persona_presente_suavizada:
         if hay_faltante and not objeto_visto_fuera:
             frames_desaparicion += 1
@@ -108,7 +120,6 @@ while cap.isOpened():
                 print("🚨 ALERTA: Faltante confirmado. Enviando evidencia...")
                 cv2.imwrite("evidencia.jpg", frame_buffer[0]) 
                 
-                # Intentar enviar la foto a la API
                 try:
                     with open("evidencia.jpg", 'rb') as f:
                         response = requests.post(API_URL, files={'file': f})
@@ -121,6 +132,10 @@ while cap.isOpened():
 
                 last_analysis_time = time.time()
                 frames_desaparicion = 0
+    else:
+        # CORRECCIÓN VITAL: Si no hay nadie, reiniciamos la sospecha a cero
+        frames_desaparicion = 0
+        cv2.putText(frame, "MONITOREO PASIVO...", (10, 35), 1, 1.3, (255, 255, 255), 2)
 
     cv2.rectangle(frame, (ESTANTE_ROI[0], ESTANTE_ROI[1]), (ESTANTE_ROI[2], ESTANTE_ROI[3]), (255, 255, 0), 1)
     cv2.imshow("SmartGuard Pro - Dashboard Link", frame)

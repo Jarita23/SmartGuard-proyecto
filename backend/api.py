@@ -19,28 +19,32 @@ from app.db.supabase_client import insert_alerta_row
 # 📱 CONFIGURACIÓN DEL BOT DE TELEGRAM
 # ==========================================
 TELEGRAM_TOKEN = "8848721200:AAGbvjLg51ng6CLxpatz7pnAbvteHg3JN1k"
-TELEGRAM_CHAT_ID = "-5057471780"
+TELEGRAM_CHAT_ID = "-1003790783396"
 
 def enviar_alerta_telegram(mensaje: str, imagen_bytes: bytes = None):
     """
     Envía la alerta directo al celular del guardia.
-    Usamos la imagen en memoria (bytes) para máxima velocidad.
     """
     try:
         if not imagen_bytes:
-            # Si por alguna razón no hay imagen, manda solo texto
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje})
+            res = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje})
         else:
-            # Mandamos la foto con el mensaje como "caption"
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
             archivos = {'photo': ('evidencia.jpg', imagen_bytes, 'image/jpeg')}
             datos = {'chat_id': TELEGRAM_CHAT_ID, 'caption': mensaje}
-            requests.post(url, data=datos, files=archivos)
+            res = requests.post(url, data=datos, files=archivos)
             
-        print("📱 Notificación enviada a Telegram exitosamente.")
+        # 🔥 ESTO MANDATORIO PARA VER EL ERROR REAL EN TU TERMINAL:
+        print(f"📡 Respuesta de Telegram: {res.status_code} -> {res.text}")
+        
+        if res.status_code == 200:
+            print("📱 Notificación enviada a Telegram exitosamente.")
+        else:
+            print("⚠️ Telegram rechazó el mensaje. Revisa los datos de arriba.")
+
     except Exception as e:
-        print(f"❌ Error al notificar por Telegram: {e}")
+        print(f"❌ Error de red al conectar con Telegram: {e}")
 
 # ==========================================
 # 🚀 APLICACIÓN FASTAPI

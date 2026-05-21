@@ -1,17 +1,64 @@
+import os
+# ORDEN SENIOR: Desactivamos el multihilo interno de FFmpeg para que no choque con nuestra clase
+os.environ["OPENCV_FFMPEG_THREADS"] = "1" 
+
 import cv2
 from ultralytics import YOLO
 import requests
 import time
+import threading
+
+# --- CLASE DE CÁMARA ASÍNCRONA (CERO LAG) ---
+# --- CLASE DE CÁMARA ASÍNCRONA (CERO LAG) ---
+class CamaraAsincrona:
+    def __init__(self, src):
+        self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+        self.ret, self.frame = self.cap.read()
+        self.corriendo = True
+        self.hilo = threading.Thread(target=self._actualizar, daemon=True)
+        self.hilo.start()
+
+    def _actualizar(self):
+        while self.corriendo:
+            try:
+                ret, frame = self.cap.read()
+                if ret:
+                    self.ret = ret
+                    self.frame = frame
+            except Exception:
+                # Si el hilo principal cierra la cámara, atrapamos el error C++ 
+                # para que el hilo muera en silencio y sin ensuciar la consola.
+                break
+
+    def read(self):
+        return self.ret, self.frame.copy() if self.ret else None
+
+    def isOpened(self):
+        return self.cap.isOpened()
+
+    def release(self):
+        # 1. Le decimos al hilo secundario que detenga su bucle
+        self.corriendo = False 
+        
+        # 2. Esperamos (hasta 1 segundo) a que el hilo termine su última lectura de forma segura
+        if self.hilo.is_alive():
+            self.hilo.join(timeout=1.0) 
+            
+        # 3. Ahora sí, con el hilo finalizado, liberamos el motor C++ de OpenCV
+        self.cap.release()
 
 # --- CONFIGURACIÓNES ---
 API_URL = "http://127.0.0.1:8000/analizar/1"
 model_obj = YOLO('yolov8n.pt')      
 model_pose = YOLO('yolov8n-pose.pt') 
 
-# [x1, y1, x2, y2]
 ESTANTE_ROI = [450, 100, 630, 450] 
 
-cap = cv2.VideoCapture(0)
+# --- CONEXIÓN A DAHUA CON CERO LAG ---
+RTSP_URL = "rtsp://admin:L2BCD08A@192.168.1.22:554/cam/realmonitor?channel=1&subtype=0"
+# Reemplazamos el VideoCapture tradicional por nuestra clase asíncrona
+cap = CamaraAsincrona(RTSP_URL)
+
 frame_buffer = []
 last_analysis_time = 0
 
@@ -20,28 +67,45 @@ stock_esperado = {73: 1, "BOTELLA": 1}
 frames_desaparicion = 0 
 UMBRAL_ROBO = 70 
 
-# Memoria de presencia
 frames_presencia_memoria = 0 
 MEMORIA_POSE_GRACIA = 30     
 
-# --- NUEVAS VARIABLES DE CALENTAMIENTO ---
 FRAME_ACTUAL = 0
-FRAMES_DE_CALENTAMIENTO = 90  # ~3 segundos de espera inicial
+FRAMES_DE_CALENTAMIENTO = 90  
 
 print("🛡️ SmartGuard Pro: Sistema CONECTADO a la API. Vigilancia activa.")
 
+def despachar_alerta_en_fondo(frame_evidencia):
+    """Envía la alerta a la API sin detener el video principal."""
+    cv2.imwrite("evidencia.jpg", frame_evidencia) 
+    try:
+        with open("evidencia.jpg", 'rb') as f:
+            response = requests.post(API_URL, files={'file': f}, timeout=15)
+        if response.status_code == 200:
+            print("✅ Alerta enviada con éxito a Supabase.")
+        else:
+            print(f"⚠️ API respondió con error: {response.status_code}")
+    except requests.exceptions.Timeout:
+        print("❌ Error: La API tardó demasiado en responder (Timeout).")
+    except Exception as e:
+        print(f"❌ No se pudo conectar con la API: {e}")
+
 while cap.isOpened():
     success, frame = cap.read()
-    if not success: break
+    if not success: 
+        time.sleep(0.1) # Si hay un micro-corte de red, esperamos un poco
+        continue
+
+    # COMPRESIÓN DE VIDEO: Ajustamos a un tamaño estándar
+    frame = cv2.resize(frame, (640, 480))
 
     FRAME_ACTUAL += 1
 
-    # 1. FASE DE CALENTAMIENTO (Evita el gatillo fácil al inicio)
     if FRAME_ACTUAL < FRAMES_DE_CALENTAMIENTO:
         cv2.putText(frame, "CALIBRANDO SENSORES...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
         cv2.imshow("SmartGuard Pro - Dashboard Link", frame)
         cv2.waitKey(1)
-        continue  # Salta directo al siguiente frame sin analizar robos
+        continue  
 
     frame_buffer.append(frame.copy())
     if len(frame_buffer) > 90: frame_buffer.pop(0) 
@@ -71,10 +135,10 @@ while cap.isOpened():
             x1, y1, x2, y2 = box
             toca_estante = not (x2 < ESTANTE_ROI[0] or x1 > ESTANTE_ROI[2] or y2 < ESTANTE_ROI[1] or y1 > ESTANTE_ROI[3])
 
-            if cls == 0: # Persona
+            if cls == 0: 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 1)
             
-            elif cls == 73 or cls == 67: # Libro o Kindle
+            elif cls == 73 or cls == 67: 
                 if toca_estante:
                     conteo_actual[73] += 1
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -82,7 +146,7 @@ while cap.isOpened():
                     objeto_visto_fuera = True
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
-            elif cls == 39 or cls == 64: # Botella o Planta
+            elif cls == 39 or cls == 64: 
                 if toca_estante:
                     conteo_actual["BOTELLA"] += 1
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -105,7 +169,6 @@ while cap.isOpened():
             frames_desaparicion = max(0, frames_desaparicion - 20)
             color_ui, mensaje = (0, 255, 0), "STOCK SEGURO"
 
-        # UI
         cv2.putText(frame, mensaje, (10, 35), 1, 1.3, color_ui, 2)
         txt_stock = f"Libro: {conteo_actual[73]}/1 | Botella: {conteo_actual['BOTELLA']}/1"
         cv2.putText(frame, txt_stock, (10, 65), 1, 1, (255, 255, 255), 1)
@@ -114,26 +177,18 @@ while cap.isOpened():
             progreso = int((frames_desaparicion / UMBRAL_ROBO) * 200)
             cv2.rectangle(frame, (10, 400), (10 + min(progreso, 200), 430), (0, 0, 255), -1)
 
-        # --- DISPARO DE ALERTA (ENVÍO REAL) ---
         if frames_desaparicion > UMBRAL_ROBO:
             if time.time() - last_analysis_time > 15:
-                print("🚨 ALERTA: Faltante confirmado. Enviando evidencia...")
-                cv2.imwrite("evidencia.jpg", frame_buffer[0]) 
+                print("🚨 ALERTA: Faltante confirmado. Procesando evidencia en segundo plano...")
                 
-                try:
-                    with open("evidencia.jpg", 'rb') as f:
-                        response = requests.post(API_URL, files={'file': f})
-                    if response.status_code == 200:
-                        print("✅ Alerta enviada con éxito a Supabase.")
-                    else:
-                        print(f"⚠️ API respondió con error: {response.status_code}")
-                except Exception as e:
-                    print(f"❌ No se pudo conectar con la API: {e}")
+                # Creamos una copia del frame y lo mandamos en un hilo para NO congelar la cámara
+                frame_copia = frame_buffer[0].copy()
+                hilo_envio = threading.Thread(target=despachar_alerta_en_fondo, args=(frame_copia,), daemon=True)
+                hilo_envio.start()
 
                 last_analysis_time = time.time()
                 frames_desaparicion = 0
     else:
-        # CORRECCIÓN VITAL: Si no hay nadie, reiniciamos la sospecha a cero
         frames_desaparicion = 0
         cv2.putText(frame, "MONITOREO PASIVO...", (10, 35), 1, 1.3, (255, 255, 255), 2)
 

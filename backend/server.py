@@ -35,6 +35,10 @@ from google import genai
 from ultralytics import YOLO
 
 # ==========================================
+# 🔌 INICIALIZACIÓN DE SERVICIOS (SINGLETON)
+# ==========================================
+# Inicialización de Gemini
+# ==========================================
 # 🔌 INICIALIZACIÓN DE SERVICIOS (MODO DIOS)
 # ==========================================
 # Inicialización de Gemini
@@ -318,7 +322,7 @@ def bucle_vigilancia():
     
     stock_esperado = {73: 1, "BOTELLA": 1} 
     frames_ocultamiento_confirmado = 0 
-    UMBRAL_GATILLO = 15
+    UMBRAL_GATILLO = 15  
     TIEMPO_COOLDOWN = 15.0 
 
     print("🛡️ SmartGuard Biométrico Preciso Activado.")

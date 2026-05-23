@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from './supabase';
-import { Shield, Bell, Camera, AlertTriangle, CheckCircle, Activity } from 'lucide-react';
+import { Shield, Bell, Camera, CheckCircle, Activity } from 'lucide-react';
 
 function App() {
   const [alertas, setAlertas] = useState([]);
@@ -27,9 +27,9 @@ function App() {
         { event: 'INSERT', schema: 'public', table: 'alertas' }, 
         (payload) => {
           setAlertas((current) => [payload.new, ...current]);
-          // Opcional: Sonido de alerta
+          // Opcional: Sonido de alerta (con catch para evitar errores de navegador)
           const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-          audio.play();
+          audio.play().catch((err) => console.log('Autoplay de audio bloqueado por el navegador'));
         }
       )
       .subscribe();
@@ -61,7 +61,7 @@ function App() {
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Columna Izquierda: Vista de Cámara (Simulada) */}
+        {/* Columna Izquierda: Vista de Cámara */}
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
             <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/80">
@@ -71,11 +71,19 @@ function App() {
               </div>
               <span className="bg-red-500/20 text-red-500 text-[10px] font-bold px-2 py-0.5 rounded animate-pulse">REC</span>
             </div>
-            <div className="aspect-video bg-black flex items-center justify-center relative group">
+            
+            <div className="aspect-video bg-black flex items-center justify-center relative group overflow-hidden">
               <div className="absolute inset-0 opacity-20 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]"></div>
-              <p className="text-slate-600 font-mono text-sm">TRANSMISIÓN ENCRIPTADA...</p>
+              
+              {/* LA MAGIA SUCEDE AQUÍ: Streaming de video unificado */}
+              <img 
+                src="http://127.0.0.1:8000/video_feed" 
+                alt="Transmisión en Tiempo Real Pasillo 01" 
+                className="w-full h-full object-contain bg-black relative z-10" 
+              />
+              
               {/* Overlay de IA */}
-              <div className="absolute top-4 left-4 border-2 border-red-500 w-32 h-32 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute top-4 left-4 border-2 border-red-500 w-32 h-32 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity z-20 pointer-events-none">
                 <span className="bg-red-500 text-[10px] text-white absolute -top-5 px-1">Sujeto Sospechoso</span>
               </div>
             </div>
@@ -121,7 +129,7 @@ function App() {
                   </div>
                   <h3 className="font-bold text-sm mb-1">{alerta.etiqueta}</h3>
                   <p className="text-xs text-slate-400 leading-relaxed italic">
-                    "{alerta.descripcion}"
+                    &quot;{alerta.descripcion}&quot;
                   </p>
                 </div>
               ))

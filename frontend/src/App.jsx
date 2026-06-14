@@ -77,7 +77,7 @@ function App() {
               
               {/* LA MAGIA SUCEDE AQUÍ: Streaming de video unificado */}
               <img 
-                src="http://127.0.0.1:8000/video_feed" 
+                src={`${import.meta.env.VITE_API_URL}/video_feed`}
                 alt="Transmisión en Tiempo Real Pasillo 01" 
                 className="w-full h-full object-contain bg-black relative z-10" 
               />

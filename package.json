@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "@supabase/supabase-js": "^2.101.1",
-    "lucide-react": "^1.7.0"
-  }
-}

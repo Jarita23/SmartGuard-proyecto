@@ -25,3 +25,6 @@ frontend/dist/
 # OS
 Thumbs.db
 .DS_Store
+
+# Ignorar imágenes temporales del backend
+backend/temp/

@@ -57,7 +57,8 @@ supabase = create_client(SUPABASE_URL_ENV, SUPABASE_MASTER_KEY) # Conecta oficia
 ORIGINES_PERMITIDOS = [                       # Lista VIP de quién puede ver el video de las cámaras
     "http://localhost:3000",                  # Permite que el diseño de prueba entre
     "http://127.0.0.1:3000",                  # Otra forma de escribir la dirección de prueba
-    "http://localhost:8000",                  # Se da permiso a sí mismo para funcionar
+    "http://localhost:8000",
+    "http://127.0.0.1:5173",                  # Se da permiso a sí mismo para funcionar
     "http://localhost:5173",                  # Permite que la interfaz visual de React (Vite) se conecte
 ]
 
@@ -85,8 +86,8 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}" # Arma la dir
 # ==========================================
 # VARIABLES GLOBALES Y CONTROL DE ESTADO
 # ==========================================
-model_obj = YOLO(str(BASE_DIR / 'models' / 'yolov8n.pt')) # Carga el cerebro visual que sabe reconocer objetos cotidianos
-model_pose = YOLO(str(BASE_DIR / 'models' / 'yolov8n-pose.pt')) # Carga el cerebro visual que sabe leer el esqueleto humano
+model_obj = YOLO(str(BASE_DIR / 'models' / 'yolov8m.pt')) # Carga el cerebro visual que sabe reconocer objetos cotidianos
+model_pose = YOLO(str(BASE_DIR / 'models' / 'yolov8m-pose.pt')) # Carga el cerebro visual que sabe leer el esqueleto humano
 
 qr_detector = cv2.QRCodeDetector()            # Enciende el escáner especial para leer los códigos QR del personal
 
@@ -201,6 +202,27 @@ def procesar_y_despachar_sospecha(frame_evidencia): # El protocolo que se activa
 
     except Exception as e:                    # Si cualquier cosa falla en este proceso...
         print(f"[BACKEND] Error al despachar sospecha: {e}") # ...imprime el error sin apagar el programa
+
+
+# ==========================================
+# 📐 MOTOR GEOMÉTRICO DE COLISIONES (AABB)
+# ==========================================
+def colision_cajas(box1, box2):
+    """
+    Detecta si dos recuadros se están tocando o superponiendo.
+    Formatos esperados: [x1, y1, x2, y2]
+    """
+    # Calculamos los bordes de la zona de intersección
+    x_left = max(box1[0], box2[0])
+    y_top = max(box1[1], box2[1])
+    x_right = min(box1[2], box2[2])
+    y_bottom = min(box1[3], box2[3])
+
+    # Si el lado derecho de la intersección es mayor al izquierdo, y el inferior mayor al superior... hay choque.
+    if x_right > x_left and y_bottom > y_top:
+        return True
+    return False
+
 
 # ==========================================
 # CAPA CLOUD FORENSE (GEMINI BAJO DEMANDA)
@@ -317,189 +339,396 @@ def bucle_telegram_polling():                 # Un vigilante que solo se dedica 
             time.sleep(3)                     # ...y espera 3 segundos para no quemar el servidor antes de reintentar
 
 # ==========================================
-# MOTOR BIOMÉTRICO LOCAL (EDGE)
+# MOTOR BIOMÉTRICO LOCAL (EDGE) - v6.1
+#
+# CAMBIOS vs v6.0:
+#   [NEW] Inferencia en resolución reducida (320x240) para modelos M sin lag
+#   [NEW] Escalado de coordenadas de vuelta a 640x480 para dibujar correctamente
+#   [NEW] Opción 4: confianza de keypoints — si no ve las muñecas, congela la barra
+#         en lugar de bajarla (evita que el ladrón escape girándose de lado)
+#
+# LÓGICA MAESTRA DE HURTO (posicional, no por conteo):
+#   [1] memoria_toco_estante   → la mano tocó el ROI en algún momento
+#   [2] faltante_en_estante    → la botella ya no está en la repisa
+#   [3] not botella_visible_fuera → la botella no se ve en ningún otro lugar
+#                                   (la ocultó bajo la ropa, no la sostiene visible)
 # ==========================================
-def bucle_vigilancia():                       # Este es el verdadero corazón del programa. Mira, analiza y juzga todo el tiempo.
-    global ultimo_frame_procesado, sistema_activo, ultimo_disparo, modo_reposicion # Trae a la memoria las variables generales importantes
-    
-    cap = CamaraAsincrona(fuente_video)       # Pide al trabajador de la cámara que empiece a mandarle el video en vivo
-    frame_buffer = []                         # Una memoria a corto plazo para guardar los últimos segunditos de video
-    
-    stock_esperado = {73: 1, "BOTELLA": 1}    # Lo que debería haber en la repisa (1 libro o 1 botella)
-    frames_ocultamiento_confirmado = 0        # Un contador de tiempo que mide cuánto rato lleva escondiendo las manos
-    UMBRAL_GATILLO = 20                       # Si esconde las manos por 20 "fotos" seguidas, es un robo seguro
-    TIEMPO_COOLDOWN = 15.0                    # Tiempo de enfriamiento: Espera 15 segundos antes de mandar otra alarma al celular
-
-    FRAME_ACTUAL = 0                          # Un contador general de todo lo que ha visto
-    FRAMES_DE_CALENTAMIENTO = 60              # Tiempo de ceguera inicial para que la cámara enfoque y aclare la imagen
-    
-    frames_desde_ultimo_qr = 999              # Tiempo transcurrido desde que vio una credencial válida
-    UMBRAL_MEMORIA_QR = 90                    # Le da 90 fotogramas (aprox 3 segundos) de gracia al reponedor si se da vuelta y tapa su QR
-
-    print("[SISTEMA] SmartGuard Biometrico Preciso Activado.") # ¡El centinela está vivo y mirando!
-
-    while cap.corriendo and sistema_activo:   # Mientras el sistema y la cámara estén encendidos...
-        success, frame = cap.read()           # ...pide la foto más actual a la cámara
-        if not success:                       # Si la cámara tiró error...
-            time.sleep(0.03)                  # ...espera un poquito...
-            continue                          # ...y vuelve a pedirle foto
-
-        frame = cv2.resize(frame, (640, 480)) # Achica la imagen para que el cerebro de IA analice todo más rápido
-        
-        FRAME_ACTUAL += 1                     # Suma 1 al historial de fotos vistas
-        if FRAME_ACTUAL < FRAMES_DE_CALENTAMIENTO: # Si todavía estamos en los primeros segundos de calentamiento...
-            cv2.putText(frame, "CALIBRANDO SENSORES OPTICOS...", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2) # ...escribe en amarillo que está calentando
-            with lock_frame:                  # ...asegura la memoria...
-                ultimo_frame_procesado = frame.copy() # ...y guarda la imagen para que el frontend la muestre
-            time.sleep(0.03)                  # ...descansa...
-            continue                          # ...y salta todo el análisis de abajo porque aún no está listo
-
-        frame_buffer.append(frame.copy())     # Guarda esta foto en la memoria corta
-        if len(frame_buffer) > 30: frame_buffer.pop(0) # Si hay más de 30 fotos viejas, borra la más antigua
-
+# ==========================================
+# MOTOR BIOMÉTRICO LOCAL (EDGE) - v7.0
+#
+# CAMBIOS vs v6.1:
+#   [FIX]  GPU forzada via .to('cuda') en los modelos (fuera del bucle, en server.py)
+#   [NEW]  Detección de orientación lateral con ajuste dinámico del rectángulo de torso
+#          y bolsillos hacia el borde frontal del cuerpo (no el centro)
+#
+# LÓGICA MAESTRA DE HURTO (posicional):
+#   [1] memoria_toco_estante     → la mano tocó el ROI en algún momento
+#   [2] faltante_en_estante      → la botella ya no está en la repisa
+#   [3] not botella_visible_fuera → la botella no se ve en ningún lugar de la cámara
+#
+# ORIENTACIÓN:
+#   Si distancia_hombros < 25% de altura torso → persona de lado
+#   El torso y bolsillos se desplazan al borde frontal según el hombro más visible
+# ==========================================
+def bucle_vigilancia():
+    global ultimo_frame_procesado, sistema_activo, ultimo_disparo, modo_reposicion
+ 
+    cap = CamaraAsincrona(fuente_video)
+ 
+    # ---- RESOLUCIÓN (inferencia reducida para mayor FPS incluso con GPU) ----
+    INF_W, INF_H   = 320, 240
+    DISP_W, DISP_H = 640, 480
+    ESCALA_X = DISP_W / INF_W   # = 2.0
+    ESCALA_Y = DISP_H / INF_H   # = 2.0
+ 
+    # ---- CONTADORES ----
+    frames_ocultamiento_confirmado = 0
+    UMBRAL_GATILLO          = 15
+    TIEMPO_COOLDOWN         = 15.0
+    FRAME_ACTUAL            = 0
+    FRAMES_DE_CALENTAMIENTO = 60
+ 
+    # ---- CONTROL QR ----
+    frames_desde_ultimo_qr = 999
+    UMBRAL_MEMORIA_QR       = 90
+ 
+    # ---- MEMORIA DE ESTADO ----
+    memoria_toco_estante = False
+    frames_sin_faltante  = 0
+    UMBRAL_PERDON        = 20
+ 
+    # ---- CONFIANZA DE KEYPOINTS ----
+    CONFIANZA_MIN_MUNECA = 0.4
+ 
+    # ---- DETECCIÓN DE ORIENTACIÓN LATERAL ----
+    UMBRAL_LADO = 0.38
+ 
+    # ---- STOCK BASE ----
+    stock_estante_congelado = 0
+    frames_para_nuevo_stock = 0  #Para evitar el stock fantasma
+ 
+    # ---- ROI ESCALADO A RESOLUCIÓN DE INFERENCIA ----
+    ROI_INF = [
+        int(ESTANTE_ROI[0] / ESCALA_X),
+        int(ESTANTE_ROI[1] / ESCALA_Y),
+        int(ESTANTE_ROI[2] / ESCALA_X),
+        int(ESTANTE_ROI[3] / ESCALA_Y),
+    ]
+ 
+    print("[SISTEMA] SmartGuard Biometrico v7.1 Activado.")
+    print("[SISTEMA] GPU activa | Torso adaptativo corregido | Filtro COCO limpio.")
+ 
+    while cap.corriendo and sistema_activo:
+ 
+        success, frame = cap.read()
+        if not success:
+            time.sleep(0.03)
+            continue
+ 
+        frame     = cv2.resize(frame, (DISP_W, DISP_H))  
+        frame_inf = cv2.resize(frame, (INF_W,  INF_H))   
+        FRAME_ACTUAL += 1
+ 
         # ========================================================
-        # FASE EXTRA: ESCÁNER AUTÓNOMO DE CREDENCIAL QR  
+        # FASE 0: CALENTAMIENTO
         # ========================================================
-        data_qr, bbox_qr, _ = qr_detector.detectAndDecode(frame) # Busca si hay códigos QR dibujados en la pantalla
-        
-        if data_qr == "STAFF_SMARTGUARD":     # Si encontró un QR válido que diga la contraseña secreta...
-            frames_desde_ultimo_qr = 0        # ...reinicia el contador de gracia a cero
-            modo_reposicion = True            # ...y activa el modo "Soy trabajador, no dispares"
-            
-            if bbox_qr is not None and len(bbox_qr) > 0: # Si además de leer el código sabe dónde está dibujado...
-                pts = bbox_qr[0].astype(int)  # ...saca las esquinas del cuadrito
-                for i in range(4):            # ...y dibuja un marco verde tecnológico alrededor del QR
-                    cv2.line(frame, tuple(pts[i]), tuple(pts[(i+1)%4]), (0, 255, 0), 2)
-                cv2.putText(frame, "STAFF VERIFICADO", (pts[0][0], pts[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) # ...y le pone un título bonito encima
-        else:                                 # Si no hay ningún código QR a la vista...
-            frames_desde_ultimo_qr += 1       # ...empieza a correr el reloj en contra del reponedor
-            if frames_desde_ultimo_qr > UMBRAL_MEMORIA_QR: # ...si pasa mucho rato sin ver su QR...
-                modo_reposicion = False       # ...le quita la inmunidad y vuelve a tratarlo como un cliente sospechoso
-
+        if FRAME_ACTUAL < FRAMES_DE_CALENTAMIENTO:
+            cv2.putText(frame, "CALIBRANDO SENSORES...", (30, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            with lock_frame:
+                ultimo_frame_procesado = frame.copy()
+            time.sleep(0.03)
+            continue
+ 
         # ========================================================
-        # INTERRUPTOR LOGÍSTICO DE COMPORTAMIENTO
+        # FASE 1: ESCÁNER QR
         # ========================================================
-        if modo_reposicion:                   # Si estamos con inmunidad de trabajador...
-            frames_ocultamiento_confirmado = 0 # ...olvida cualquier actitud sospechosa previa
-            color_ui = (0, 140, 255)          # ...cambia los dibujos de la pantalla a color Naranjo Corporativo
-            mensaje = f"MODO REPOSICION: VIGILANCIA PASIVA ({max(0, (UMBRAL_MEMORIA_QR - frames_desde_ultimo_qr)//30)}s)" # ...escribe un mensaje avisando cuántos segundos de inmunidad le quedan
-            cv2.putText(frame, mensaje, (10, 35), 1, 1.2, color_ui, 2) # ...y lo pega en la pantalla
-            
-            cv2.rectangle(frame, (ESTANTE_ROI[0], ESTANTE_ROI[1]), (ESTANTE_ROI[2], ESTANTE_ROI[3]), (0, 140, 255), 1) # Pinta el estante naranjo
-            with lock_frame:                  # ...bloquea la variable compartida...
-                ultimo_frame_procesado = frame.copy() # ...y guarda la imagen para mostrarla en el Dashboard
-            time.sleep(0.01)                  # ...descansa un pelito...
-            continue                          # ...y SALTA TODO EL ANÁLISIS DE SEGURIDAD de abajo (es la ventaja de ser staff)
-
-        # --- FLUJO NORMAL DE SEGURIDAD ---
-        manos_en_peligro = False              # Bandera: asume que las manos se portan bien
-        persona_presente = False              # Bandera: asume que la tienda está vacía
-
-        results_pose = model_pose(frame, stream=True, verbose=False, conf=0.5) # Le manda la foto a la IA para que detecte huesos y articulaciones
-        
-        for r in results_pose:                # Por cada persona detectada en la imagen...
-            if r.keypoints is not None and len(r.keypoints.xy) > 0: # ...si realmente encontró puntos clave válidos...
-                kpts = r.keypoints.xy[0].cpu().numpy() # ...los extrae a una lista matemática
-                if len(kpts) >= 13:           # ...y si al menos encontró la mitad superior del cuerpo...
-                    persona_presente = True   # ...avisa que hay alguien frente a la cámara
-                    l_sh, r_sh = kpts[5], kpts[6] # ...busca dónde están los hombros (izquierdo y derecho)
-                    l_wrist, r_wrist = kpts[9], kpts[10] # ...busca dónde están las muñecas
-                    l_hip, r_hip = kpts[11], kpts[12] # ...busca dónde están las caderas
-
-                    distancia_hombros = abs(l_sh[0] - r_sh[0]) # Mide qué tan ancho es el cliente
-                    centro_x = (l_sh[0] + r_sh[0]) / 2.0 # Encuentra exactamente la mitad de su pecho
+        try:
+            data_qr, _, _ = qr_detector.detectAndDecode(frame_inf)
+        except Exception:
+            data_qr = ""
+ 
+        if data_qr == "STAFF_SMARTGUARD":
+            frames_desde_ultimo_qr = 0
+            modo_reposicion = True
+        else:
+            frames_desde_ultimo_qr += 1
+            if frames_desde_ultimo_qr > UMBRAL_MEMORIA_QR:
+                modo_reposicion = False
+ 
+        if modo_reposicion:
+            frames_ocultamiento_confirmado = 0
+            memoria_toco_estante           = False
+            frames_sin_faltante            = 0
+            stock_estante_congelado        = 0
+            cv2.rectangle(frame, (0, 0), (DISP_W, 80), (0, 0, 0), -1)
+            cv2.putText(frame, "MODO REPOSICION: VIGILANCIA PASIVA", (10, 35), 1, 1.2, (0, 140, 255), 2)
+            cv2.rectangle(frame,
+                          (ESTANTE_ROI[0], ESTANTE_ROI[1]),
+                          (ESTANTE_ROI[2], ESTANTE_ROI[3]), (0, 140, 255), 1)
+            with lock_frame:
+                ultimo_frame_procesado = frame.copy()
+            time.sleep(0.01)
+            continue
+ 
+        # ========================================================
+        # FASE 2: DETECCIÓN DE OBJETOS
+        # ========================================================
+        obj_results = model_obj.track(frame_inf, persist=True, conf=0.35, verbose=False)
+ 
+        botellas_en_estante   = 0
+        botella_visible_fuera = False
+        cliente_en_zona       = False
+        persona_en_camara     = False
+ 
+        if obj_results[0].boxes.id is not None:
+            clases_obj = obj_results[0].boxes.cls.cpu().numpy().astype(int)
+            boxes_obj  = obj_results[0].boxes.xyxy.cpu().numpy()
+ 
+            for box_inf_raw, cls in zip(boxes_obj, clases_obj):
+                xi1, yi1, xi2, yi2 = box_inf_raw
+                xd1 = int(xi1 * ESCALA_X)
+                yd1 = int(yi1 * ESCALA_Y)
+                xd2 = int(xi2 * ESCALA_X)
+                yd2 = int(yi2 * ESCALA_Y)
+                box_inf_int = [int(xi1), int(yi1), int(xi2), int(yi2)]
+ 
+                if cls == 0:
+                    persona_en_camara = True
+                    if colision_cajas(box_inf_int, ROI_INF):
+                        cliente_en_zona = True
+                        cv2.rectangle(frame, (xd1, yd1), (xd2, yd2), (0, 255, 255), 2)
+                        cv2.putText(frame, "CLIENTE EN ZONA", (xd1, yd1 - 10), 1, 1.2, (0, 255, 255), 2)
+                    else:
+                        cv2.rectangle(frame, (xd1, yd1), (xd2, yd2), (0, 150, 150), 1)
+ 
+                # 🚀 SOLUCIÓN BUG 1: Filtro estricto COCO. 39=Botella, 41=Taza/Vaso. (Eliminamos 67 y 73)
+                elif cls in [39, 41]:
+                    if colision_cajas(box_inf_int, ROI_INF):
+                        botellas_en_estante += 1
+                        cv2.rectangle(frame, (xd1, yd1), (xd2, yd2), (0, 255, 0), 2)
+                    else:
+                        botella_visible_fuera = True
+                        cv2.rectangle(frame, (xd1, yd1), (xd2, yd2), (255, 165, 0), 2)
+ 
+        if not persona_en_camara:
+            memoria_toco_estante = False
+            frames_sin_faltante  = 0
+ 
+        cv2.rectangle(frame, (0, 0), (DISP_W, 80), (0, 0, 0), -1)
+ 
+        # ========================================================
+        # FASE 3: STOCK BASE (MÁXIMO HISTÓRICO CON ANTI-REBOTE)
+        # ========================================================
+        if botellas_en_estante > stock_estante_congelado:
+            frames_para_nuevo_stock += 1
+            if frames_para_nuevo_stock >= 10:  # 🚀 Requiere ~0.5s visualizando el nuevo producto
+                stock_estante_congelado = botellas_en_estante
+                frames_para_nuevo_stock = 0
+                print(f"[STOCK] Nuevo maximo confirmado en estante: {stock_estante_congelado}")
+        else:
+            # Si fue un parpadeo fantasma y volvió a 1, reseteamos el contador
+            frames_para_nuevo_stock = 0
+ 
+        # ========================================================
+        # FASE 4: FALTANTE Y REGLA DE PERDÓN
+        # ========================================================
+        faltante_en_estante = (botellas_en_estante < stock_estante_congelado)
+ 
+        if not faltante_en_estante and memoria_toco_estante:
+            frames_sin_faltante += 1
+            if frames_sin_faltante >= UMBRAL_PERDON:
+                memoria_toco_estante = False
+                frames_sin_faltante  = 0
+                print("[SISTEMA] Memoria borrada: botella devuelta al estante.")
+        else:
+            frames_sin_faltante = 0
+ 
+        manos_en_peligro    = False
+        esqueleto_confiable = False
+ 
+        # ========================================================
+        # FASE 5: MÁQUINA DE ESTADOS
+        # ========================================================
+ 
+        # ESTADO 1: PASIVO
+        if not faltante_en_estante and not memoria_toco_estante:
+            if frames_ocultamiento_confirmado > 0:
+                frames_ocultamiento_confirmado = max(0, frames_ocultamiento_confirmado - 2)
+            cv2.putText(frame, "MONITOREO PASIVO...", (10, 40), 1, 1.2, (255, 255, 255), 2)
+            cv2.putText(frame, f"STOCK BASE: {stock_estante_congelado} | EN REPISA: {botellas_en_estante}",
+                        (10, 65), 1, 0.9, (0, 255, 0), 2)
+ 
+        # ESTADO 2: BIOMETRÍA ACTIVA
+        else:
+            results_pose = model_pose(frame_inf, stream=False, verbose=False, conf=0.5)
+ 
+            for r in results_pose:
+                if r.keypoints is None or len(r.keypoints.xy) == 0:
+                    continue
+ 
+                kpts      = r.keypoints.xy[0].cpu().numpy()
+                kpts_conf = r.keypoints.conf[0].cpu().numpy()
+ 
+                if len(kpts) < 13:
+                    continue
+ 
+                # ---- CONFIANZA DE MUÑECAS ----
+                muneca_izq_ok       = kpts_conf[9]  > CONFIANZA_MIN_MUNECA
+                muneca_der_ok       = kpts_conf[10] > CONFIANZA_MIN_MUNECA
+                esqueleto_confiable = muneca_izq_ok or muneca_der_ok
+ 
+                # ---- PUNTOS CLAVE (escala INF) ----
+                l_sh,    r_sh    = kpts[5],  kpts[6]
+                l_wrist, r_wrist = kpts[9],  kpts[10]
+                l_hip,   r_hip   = kpts[11], kpts[12]
+ 
+                # ---- MÉTRICAS CORPORALES BASE ----
+                distancia_hombros  = abs(l_sh[0] - r_sh[0])
+                dist_hombro_cadera = abs(min(l_sh[1], r_sh[1]) - max(l_hip[1], r_hip[1]))
+                centro_x           = (l_sh[0] + r_sh[0]) / 2.0
+                offset_y           = 5
+                radio_bolsillo     = 18   # en escala INF
+ 
+                esta_de_lado = distancia_hombros < (dist_hombro_cadera * UMBRAL_LADO)
+ 
+                if esta_de_lado:
+                    # 🚀 FIX DIRECCIONAL: Saber hacia dónde está mirando el cliente
+                    conf_izq = kpts_conf[5]  # Confianza del hombro izquierdo
+                    conf_der = kpts_conf[6]  # Confianza del hombro derecho
                     
-                    min_x_torso = centro_x - (distancia_hombros * 0.35) # Dibuja la pared izquierda de una caja imaginaria alrededor del cuerpo
-                    max_x_torso = centro_x + (distancia_hombros * 0.35) # Dibuja la pared derecha de la caja imaginaria 
-                    min_y_torso = min(l_sh[1], r_sh[1]) + 20 # Dibuja el techo de la caja (cerca del cuello)
-                    max_y_torso = max(l_hip[1], r_hip[1]) - 20 # Dibuja el piso de la caja (cerca de la cintura)
+                    ancho_pecho = dist_hombro_cadera * 0.45
                     
-                    radio_bolsillo = 35       # Tamaño en píxeles de los círculos que representarán los bolsillos
-                    offset_y = 10             # Mueve los círculos de los bolsillos un poquito más abajo de la cadera real
-                    
-                    bolsillo_izq_x = l_hip[0] # Centro horizontal del bolsillo izquierdo
-                    bolsillo_der_x = r_hip[0] # Centro horizontal del bolsillo derecho
-                    bolsillo_izq_y = l_hip[1] + offset_y # Centro vertical del bolsillo izquierdo
-                    bolsillo_der_y = r_hip[1] + offset_y # Centro vertical del bolsillo derecho
+                    if conf_izq > conf_der:
+                        # Mira hacia la izquierda de la pantalla. El pecho está hacia la izquierda (-X)
+                        hombro_visible_x = l_sh[0]
+                        min_x_torso = hombro_visible_x - (ancho_pecho * 1.3) # Proyecta el pecho hacia adelante
+                        max_x_torso = hombro_visible_x + (ancho_pecho * 0.2) # Apenas cubre la espalda
+                    else:
+                        # Mira hacia la derecha de la pantalla. El pecho está hacia la derecha (+X)
+                        hombro_visible_x = r_sh[0]
+                        min_x_torso = hombro_visible_x - (ancho_pecho * 0.2) # Apenas cubre la espalda
+                        max_x_torso = hombro_visible_x + (ancho_pecho * 1.3) # Proyecta el pecho hacia adelante
 
-                    if min_x_torso > 0 and min_y_torso > 0: # Si la persona está bien cuadrada en la cámara...
-                        cv2.rectangle(frame, (int(min_x_torso), int(min_y_torso)), (int(max_x_torso), int(max_y_torso)), (255, 255, 255), 1) # ...dibuja en la pantalla la caja blanca del torso
-                        cv2.circle(frame, (int(bolsillo_izq_x), int(bolsillo_izq_y)), radio_bolsillo, (0, 165, 255), 1) # ...dibuja el círculo del bolsillo izquierdo
-                        cv2.circle(frame, (int(bolsillo_der_x), int(bolsillo_der_y)), radio_bolsillo, (0, 165, 255), 1) # ...dibuja el círculo del bolsillo derecho
-
-                    for wrist in [l_wrist, r_wrist]: # Ahora, analiza por separado la muñeca izquierda y la derecha:
-                        wx, wy = wrist        # Anota la posición X e Y de la muñeca
-                        if wx > 0 and wy > 0: # Si la cámara realmente está viendo la muñeca (y no está escondida tras algo gigante)...
-                            en_torso = (min_x_torso <= wx <= max_x_torso) and (min_y_torso <= wy <= max_y_torso) # ...pregunta: ¿la mano está tocando el pecho/guata?
-                            dist_bolsillo_izq = math.hypot(wx - bolsillo_izq_x, wy - bolsillo_izq_y) # ...mide con regla imaginaria la distancia al bolsillo izquierdo
-                            dist_bolsillo_der = math.hypot(wx - bolsillo_der_x, wy - bolsillo_der_y) # ...mide con regla imaginaria la distancia al bolsillo derecho
-                            en_bolsillo = (dist_bolsillo_izq < radio_bolsillo) or (dist_bolsillo_der < radio_bolsillo) # ...pregunta: ¿la mano cruzó el perímetro del círculo de algún bolsillo?
-
-                            if en_torso or en_bolsillo: # Si tiene la mano en la guata (ocultando algo) o metida en el bolsillo...
-                                manos_en_peligro = True # ...¡Levanta la bandera roja!
-                                cv2.circle(frame, (int(wx), int(wy)), 8, (0, 0, 255), -1) # ...y pinta la muñeca de color ROJO
-                            else:             # Si tiene los brazos normales a los lados...
-                                cv2.circle(frame, (int(wx), int(wy)), 6, (0, 255, 0), -1) # ...pinta la muñeca de VERDE, todo en orden
-
-        obj_results = model_obj.track(frame, persist=True, conf=0.30, verbose=False) # Al mismo tiempo, le pasa la foto a la OTRA IA para que cuente los objetos
-        conteo_actual = {73: 0, "BOTELLA": 0} # Inicializa los contadores de la repisa en cero
-        
-        if obj_results[0].boxes.id is not None: # Si la IA logró detectar cosas concretas...
-            clases_obj = obj_results[0].boxes.cls.cpu().numpy().astype(int) # ...saca el número de categoría (ej. 39 es botella)
-            boxes_obj = obj_results[0].boxes.xyxy.cpu().numpy().astype(int) # ...saca las coordenadas del objeto
-
-            for box, cls in zip(boxes_obj, clases_obj): # Por cada objeto y su tipo...
-                x1, y1, x2, y2 = box          # ...saca los puntos para dibujar un rectángulo sobre la botella
-                toca_estante = not (x2 < ESTANTE_ROI[0] or x1 > ESTANTE_ROI[2] or y2 < ESTANTE_ROI[1] or y1 > ESTANTE_ROI[3]) # ...analiza geométricamente si el producto sigue dentro de la repisa (ROI)
-
-                if cls in [73, 67]:           # Si es un objeto genérico...
-                    conteo_actual[73] += 1    # ...suma 1 a la lista
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0) if toca_estante else (0, 255, 255), 2) # ...lo dibuja verde si está en el estante, o amarillo si se lo llevaron
-                elif cls in [39, 64]:         # Si la IA sabe específicamente que es una botella o taza...
-                    conteo_actual["BOTELLA"] += 1 # ...suma 1 al contador de botellas
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0) if toca_estante else (0, 255, 255), 2) # ...la dibuja de color según dónde esté
-
-        hay_faltante = (conteo_actual[73] < stock_esperado[73]) or (conteo_actual["BOTELLA"] < stock_esperado["BOTELLA"]) # Revisa las matemáticas: ¿Hay menos objetos que el stock esperado?
-
-        # LÓGICA CORE DE SMARTGUARD (El cerebro tomador de decisiones)
-        if persona_presente:                  # Si hay un cliente...
-            if hay_faltante and manos_en_peligro: # Y además se perdió un producto Y además tiene las manos sospechosas...
-                frames_ocultamiento_confirmado += 1 # ...empieza a llenar la barra de peligro sumando tiempo
-                color_ui = (0, 0, 255)        # ...prepara letras color rojo sangre
-                mensaje = "ALERTA BIOMETRICA: OCULTAMIENTO" # ...prepara el título del delito
-            elif hay_faltante and not manos_en_peligro: # Si falta un producto PERO sus manos están a la vista de todos...
-                frames_ocultamiento_confirmado = 0 # ...es un comprador normal caminando, reinicia el peligro a cero
-                color_ui = (255, 255, 0)      # ...prepara letras amarillas
-                mensaje = "CLIENTE SOSTENIENDO OBJETO" # ...y avisa que está vitrineando
-            else:                             # Si no falta nada...
-                frames_ocultamiento_confirmado = 0 # ...relaja el nivel de peligro
-                color_ui = (0, 255, 0)        # ...letras verdes
-                mensaje = "STOCK SEGURO"      # ...todo pacífico
-            
-            if frames_ocultamiento_confirmado >= UMBRAL_GATILLO: # Si la barra de peligro se llenó por esconder el producto mucho rato...
-                tiempo_actual = time.time()   # ...mira la hora exacta
-                if (tiempo_actual - ultimo_disparo) > TIEMPO_COOLDOWN: # ...y si no ha mandado alarmas en los últimos 15 segundos...
-                    print("[GATILLO BIOMETRICO] Despachando evidencia local...") # ...Grita por consola
-                    frame_copia = frame.copy() # ...saca una fotocopia impecable del cuadro actual
-                    threading.Thread(target=procesar_y_despachar_sospecha, args=(frame_copia,), daemon=True).start() # ...le tira la foto a un trabajador nuevo para que llame a la policía por Telegram sin pausar el video
-                    ultimo_disparo = tiempo_actual # ...anota la hora en que mandó la alarma
-                    time.sleep(5.0)           # ...respira profundo por 5 segundos para que la cámara no se sature procesando el robo
-                frames_ocultamiento_confirmado = 0 # ...vuelve la barra de peligro a cero para buscar el siguiente robo
-                
-            cv2.putText(frame, mensaje, (10, 35), 1, 1.2, color_ui, 2) # Pega el gran letrero de estado arriba a la izquierda
-        else:                                 # Si la tienda está vacía...
-            frames_ocultamiento_confirmado = 0 # ...la barra de robo está en cero
-            cv2.putText(frame, "MONITOREO PASIVO...", (10, 35), 1, 1.2, (255, 255, 255), 2) # ...y letrero blanco de aburrimiento
-
-        cv2.rectangle(frame, (ESTANTE_ROI[0], ESTANTE_ROI[1]), (ESTANTE_ROI[2], ESTANTE_ROI[3]), (255, 255, 0), 1) # Vuelve a dibujar la línea del estante en amarillo pálido
-        
-        with lock_frame:                      # Cierra la puerta con seguro temporalmente...
-            ultimo_frame_procesado = frame.copy() # ...y guarda este fotograma terminado, lleno de dibujos IA, para que FastAPI se lo muestre a React
-
-        time.sleep(0.01)                      # Pequeña micro-siesta para darle ritmo al bucle
-
-    cv2.destroyAllWindows()                   # Cierra cualquier ventana que haya quedado abierta si se apaga el sistema
-    cap.release()                             # Apaga y suelta el cable de la cámara amigablemente
+                    # Altura (se mantiene la calibración perfecta que ya logramos)
+                    min_y_torso = min(l_sh[1], r_sh[1]) + (dist_hombro_cadera * 0.05)
+                    max_y_torso = max(l_hip[1], r_hip[1]) - (dist_hombro_cadera * 0.15)
+ 
+                    bolsillo_izq = (l_hip[0], l_hip[1] + offset_y)
+                    bolsillo_der = (r_hip[0], r_hip[1] + offset_y)
+ 
+                    cv2.putText(frame, "MODO LATERAL", (DISP_W - 160, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 100, 0), 1)
+ 
+                else:
+                    # ---- MODO FRONTAL ----
+                    min_x_torso = centro_x - (distancia_hombros * 0.35)
+                    max_x_torso = centro_x + (distancia_hombros * 0.35)
+                    min_y_torso = min(l_sh[1], r_sh[1]) + (dist_hombro_cadera * 0.4)
+                    max_y_torso = max(l_hip[1], r_hip[1]) - 10
+                    bolsillo_izq = (l_hip[0], l_hip[1] + offset_y)
+                    bolsillo_der = (r_hip[0], r_hip[1] + offset_y)
+ 
+                # ---- DIBUJO DE ZONAS (escalado a display) ----
+                if min_x_torso > 0 and min_y_torso > 0:
+                    cv2.rectangle(frame,
+                                  (int(min_x_torso * ESCALA_X), int(min_y_torso * ESCALA_Y)),
+                                  (int(max_x_torso * ESCALA_X), int(max_y_torso * ESCALA_Y)),
+                                  (255, 255, 255), 1)
+                    cv2.circle(frame,
+                               (int(bolsillo_izq[0] * ESCALA_X), int(bolsillo_izq[1] * ESCALA_Y)),
+                               int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
+                    cv2.circle(frame,
+                               (int(bolsillo_der[0] * ESCALA_X), int(bolsillo_der[1] * ESCALA_Y)),
+                               int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
+ 
+                # ---- ANÁLISIS DE MUÑECAS ----
+                for wrist, wrist_ok in [(l_wrist, muneca_izq_ok), (r_wrist, muneca_der_ok)]:
+                    wx, wy = wrist
+ 
+                    if wx <= 0 or wy <= 0 or not wrist_ok:
+                        continue
+ 
+                    en_estante  = colision_cajas([wx-3, wy-3, wx+3, wy+3], ROI_INF)
+                    en_torso    = (min_x_torso <= wx <= max_x_torso and
+                                   min_y_torso <= wy <= max_y_torso)
+                    en_bolsillo = (math.hypot(wx - bolsillo_izq[0], wy - bolsillo_izq[1]) < radio_bolsillo or
+                                   math.hypot(wx - bolsillo_der[0], wy - bolsillo_der[1]) < radio_bolsillo)
+ 
+                    wx_d = int(wx * ESCALA_X)
+                    wy_d = int(wy * ESCALA_Y)
+ 
+                    if en_estante:
+                        memoria_toco_estante = True
+                        frames_sin_faltante  = 0
+                        cv2.circle(frame, (wx_d, wy_d), 8, (255, 0, 255), -1)      
+ 
+                    elif en_torso or en_bolsillo:
+                        if memoria_toco_estante and faltante_en_estante and not botella_visible_fuera:
+                            manos_en_peligro = True
+                            cv2.circle(frame, (wx_d, wy_d), 8, (0, 0, 255), -1)    
+                        else:
+                            cv2.circle(frame, (wx_d, wy_d), 6, (255, 255, 0), -1)  
+ 
+                    else:
+                        cv2.circle(frame, (wx_d, wy_d), 6, (0, 255, 0), -1)        
+ 
+            # ---- GATILLO ANTI-PARPADEO CON CONFIANZA DE KEYPOINTS ----
+            if manos_en_peligro:
+                frames_ocultamiento_confirmado += 1
+                cv2.putText(frame,
+                            f"ALERTA HURTO ({frames_ocultamiento_confirmado}/{UMBRAL_GATILLO})",
+                            (10, 40), 1, 1.2, (0, 0, 255), 2)
+ 
+            elif not esqueleto_confiable:
+                cv2.putText(frame, "ESQUELETO PARCIAL: BARRA CONGELADA",
+                            (10, 40), 1, 1.0, (0, 100, 255), 2)
+ 
+            else:
+                frames_ocultamiento_confirmado = max(0, frames_ocultamiento_confirmado - 2)
+ 
+                if faltante_en_estante and botella_visible_fuera:
+                    cv2.putText(frame, "CLIENTE SOSTIENE PRODUCTO (SEGURO)",
+                                (10, 40), 1, 1.2, (0, 255, 255), 2)
+                elif faltante_en_estante and not botella_visible_fuera and memoria_toco_estante:
+                    cv2.putText(frame, "ANALISIS ACTIVO: BUSCANDO MANOS",
+                                (10, 40), 1, 1.2, (255, 100, 0), 2)
+                elif memoria_toco_estante:
+                    cv2.putText(frame, "SEGUIMIENTO BIOMETRICO ACTIVO",
+                                (10, 40), 1, 1.2, (0, 165, 255), 2)
+                else:
+                    cv2.putText(frame, "ZONA BLOQUEADA (OCLUSION)",
+                                (10, 40), 1, 1.2, (0, 165, 255), 2)
+ 
+            cv2.putText(frame,
+                        f"STOCK: {stock_estante_congelado} | REPISA: {botellas_en_estante} | "
+                        f"FUERA: {botella_visible_fuera} | SKEL: {esqueleto_confiable} | "
+                        f"LADO: {esta_de_lado}",
+                        (10, 65), 1, 0.7, (180, 180, 180), 1)
+ 
+        # ========================================================
+        # FASE 6: GATILLO FINAL → TELEGRAM
+        # ========================================================
+        if frames_ocultamiento_confirmado >= UMBRAL_GATILLO:
+            if (time.time() - ultimo_disparo) > TIEMPO_COOLDOWN:
+                print("[GATILLO] Condicion cumplida. Despachando evidencia...")
+                threading.Thread(
+                    target=procesar_y_despachar_sospecha,
+                    args=(frame.copy(),),
+                    daemon=True
+                ).start()
+                ultimo_disparo = time.time()
+            frames_ocultamiento_confirmado = 0
+ 
+        cv2.rectangle(frame,
+                      (ESTANTE_ROI[0], ESTANTE_ROI[1]),
+                      (ESTANTE_ROI[2], ESTANTE_ROI[3]),
+                      (255, 255, 0), 1)
+ 
+        with lock_frame:
+            ultimo_frame_procesado = frame.copy()
+        time.sleep(0.01)
+ 
+    cap.release()                                                           # Apaga la cámara al terminar                                                             # Apaga la cámara al terminar el turno
 
 # ==========================================
 # CONTROL DE CICLO DE VIDA DEL SERVIDOR

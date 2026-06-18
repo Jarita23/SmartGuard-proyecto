@@ -1,136 +1,178 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from './supabase';
-import { Shield, Bell, Camera, CheckCircle, Activity } from 'lucide-react';
+import { Shield, Bell, Camera, CheckCircle, Activity, AlertTriangle, FileText, Smartphone } from 'lucide-react';
 
 function App() {
   const [alertas, setAlertas] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. Cargar alertas iniciales y suscribirse al tiempo real
   useEffect(() => {
     const fetchAlertas = async () => {
       const { data } = await supabase
         .from('alertas')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(10);
+        .limit(15);
+      
       setAlertas(data || []);
       setLoading(false);
     };
 
     fetchAlertas();
 
-    // SUSCRIPCIÓN REALTIME: La magia de tu tesis
+    // SUSCRIPCIÓN EN TIEMPO REAL A SUPABASE
     const channel = supabase
       .channel('schema-db-changes')
-      .on('postgres_changes', 
-        { event: 'INSERT', schema: 'public', table: 'alertas' }, 
-        (payload) => {
-          setAlertas((current) => [payload.new, ...current]);
-          // Opcional: Sonido de alerta (con catch para evitar errores de navegador)
-          const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-          audio.play().catch((err) => console.log('Autoplay de audio bloqueado por el navegador'));
-        }
-      )
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'alertas' }, (payload) => {
+        setAlertas((current) => [payload.new, ...current]);
+        const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+        audio.play().catch(() => console.log('Autoplay bloqueado'));
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'alertas' }, (payload) => {
+        // Cuando Telegram actualiza a 'riesgo_alto' o a 'falsa_alarma'
+        setAlertas((current) => current.map(a => a.id === payload.new.id ? payload.new : a));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'alertas' }, (payload) => {
+        // Por si alguna vez borran la fila manualmente desde Supabase
+        setAlertas((current) => current.filter(a => a.id !== payload.old.id));
+      })
       .subscribe();
 
     return () => supabase.removeChannel(channel);
   }, []);
 
+  // FILTRO INTELIGENTE: Ocultamos de la pantalla las falsas alarmas, pero siguen existiendo en la BD por auditoría
+  const alertasVisibles = alertas.filter(a => a.estado_validacion !== 'falsa_alarma');
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
-      {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/50 p-4 sticky top-0 backdrop-blur-md z-10">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="bg-red-600 p-2 rounded-lg animate-pulse">
-              <Shield size={24} className="text-white" />
-            </div>
-            <h1 className="text-2xl font-bold tracking-tight">
-              SmartGuard <span className="text-red-500 text-sm font-mono">LIVE v2.5</span>
-            </h1>
+    <div className="min-h-screen bg-[#0a0f18] text-slate-200 font-sans selection:bg-red-500/30">
+      <header className="border-b border-slate-800 bg-[#0d131f] p-3 sticky top-0 z-10 flex justify-between items-center shadow-md">
+        <div className="flex items-center gap-3 ml-4">
+          <div className="bg-red-600 p-1.5 rounded animate-pulse">
+            <Shield size={20} className="text-white" />
           </div>
-          <div className="flex items-center gap-4 text-sm font-medium">
-            <div className="flex items-center gap-2 text-green-400 bg-green-400/10 px-3 py-1 rounded-full">
-              <Activity size={16} /> API Online
-            </div>
-            <div className="text-slate-400 italic">Talca, Maule</div>
+          <h1 className="text-xl font-bold tracking-tight uppercase">
+            SmartGuard <span className="text-red-500 text-xs font-mono ml-1">LIVE v2.5</span>
+          </h1>
+        </div>
+        <div className="flex items-center gap-4 text-xs font-medium mr-4">
+          <div className="flex items-center gap-1.5 text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-2 py-1 rounded-sm">
+            <Activity size={14} /> LINK SECURE
           </div>
+          <div className="text-slate-500 uppercase tracking-widest font-mono">Central Maule</div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <main className="p-4 grid grid-cols-1 lg:grid-cols-4 gap-4">
         
-        {/* Columna Izquierda: Vista de Cámara */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/80">
+        {/* Visor de Cámara */}
+        <div className="lg:col-span-3 flex flex-col gap-4">
+          <div className="bg-[#0d131f] rounded-sm border border-slate-800 shadow-lg overflow-hidden">
+            <div className="px-3 py-2 border-b border-slate-800 flex justify-between items-center bg-black/40">
               <div className="flex items-center gap-2">
-                <Camera size={18} className="text-slate-400" />
-                <span className="font-semibold uppercase tracking-wider text-xs">Cámara Principal - Pasillo 01</span>
+                <Camera size={16} className="text-slate-400" />
+                <span className="font-bold uppercase tracking-widest text-xs text-slate-300">CAM-01 / Pasillo Principal</span>
               </div>
-              <span className="bg-red-500/20 text-red-500 text-[10px] font-bold px-2 py-0.5 rounded animate-pulse">REC</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono text-slate-500">FPS: 30</span>
+                <span className="bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm animate-pulse tracking-widest">REC</span>
+              </div>
             </div>
             
-            <div className="aspect-video bg-black flex items-center justify-center relative group overflow-hidden">
-              <div className="absolute inset-0 opacity-20 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]"></div>
-              
-              {/* LA MAGIA SUCEDE AQUÍ: Streaming de video unificado */}
+            <div className="aspect-video bg-black relative group flex items-center justify-center">
+              <div className="absolute inset-0 opacity-10 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]"></div>
               <img 
-               src="http://127.0.0.1:8000/video_feed" 
-               alt="Transmisión en Tiempo Real Pasillo 01" 
-               className="w-full h-full object-contain rounded-lg bg-black" 
+                src="http://127.0.0.1:8000/video_feed" 
+                alt="Feed CAM-01" 
+                className="w-full h-full object-contain" 
               />
-              
-              {/* Overlay de IA */}
-              <div className="absolute top-4 left-4 border-2 border-red-500 w-32 h-32 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity z-20 pointer-events-none">
-                <span className="bg-red-500 text-[10px] text-white absolute -top-5 px-1">Sujeto Sospechoso</span>
-              </div>
             </div>
           </div>
         </div>
 
-        {/* Columna Derecha: Feed de Alertas */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between px-2">
-            <h2 className="text-lg font-bold flex items-center gap-2">
-              <Bell size={20} className="text-red-500" /> Historial de Alertas
+        {/* Panel de Alertas Forenses */}
+        <div className="bg-[#0d131f] border border-slate-800 rounded-sm flex flex-col shadow-lg overflow-hidden lg:h-[calc(100vh-100px)]">
+          <div className="p-3 border-b border-slate-800 bg-black/40 flex items-center justify-between">
+            <h2 className="text-sm font-bold flex items-center gap-2 uppercase tracking-wide">
+              <Bell size={16} className="text-red-500" /> Eventos
             </h2>
-            <span className="text-xs text-slate-500">Últimas 10</span>
+            <span className="text-[10px] font-mono text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded-sm">
+              {alertasVisibles.length} ACTIVOS
+            </span>
           </div>
 
-          <div className="space-y-3 overflow-y-auto max-h-[calc(100vh-200px)] pr-2 custom-scrollbar">
+          <div className="flex-grow overflow-y-auto p-3 space-y-3 custom-scrollbar">
             {loading ? (
-              <p className="text-center text-slate-500 py-10">Conectando con la IA...</p>
-            ) : alertas.length === 0 ? (
-              <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl text-center">
-                <CheckCircle className="mx-auto mb-2 text-green-500" />
-                <p className="text-sm text-slate-400">Todo despejado en Talca</p>
+              <p className="text-center text-slate-500 py-10 font-mono text-xs">Sincronizando nodo...</p>
+            ) : alertasVisibles.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-40 text-slate-600">
+                <Shield size={32} className="mb-2 opacity-50" />
+                <p className="text-xs uppercase tracking-widest">Sin Detecciones</p>
               </div>
             ) : (
-              alertas.map((alerta) => (
+              alertasVisibles.map((alerta) => (
                 <div 
                   key={alerta.id} 
-                  className={`p-4 rounded-xl border transition-all duration-500 animate-in slide-in-from-right-5 ${
-                    alerta.severidad === 'alta' 
-                    ? 'bg-red-500/10 border-red-500/50 shadow-lg shadow-red-500/5' 
-                    : 'bg-slate-900 border-slate-800'
+                  className={`rounded-sm border transition-all duration-300 ${
+                    alerta.estado_validacion === 'riesgo_alto' 
+                    ? 'bg-red-950/20 border-red-900 shadow-md' 
+                    : 'bg-slate-900 border-slate-700'
                   }`}
                 >
-                  <div className="flex justify-between items-start mb-2">
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                      alerta.severidad === 'alta' ? 'bg-red-500 text-white' : 'bg-slate-700 text-slate-300'
-                    }`}>
-                      {alerta.severidad}
-                    </span>
-                    <span className="text-[10px] text-slate-500 font-mono">
-                      {new Date(alerta.created_at).toLocaleTimeString()}
-                    </span>
+                  <div className="p-3">
+                    <div className="flex justify-between items-start mb-1.5">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle size={14} className={alerta.estado_validacion === 'riesgo_alto' ? 'text-red-500' : 'text-amber-500'} />
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-sm uppercase tracking-wider ${
+                          alerta.estado_validacion === 'riesgo_alto' ? 'bg-red-600 text-white' : 'bg-amber-500/20 text-amber-400'
+                        }`}>
+                          {alerta.estado_validacion === 'riesgo_alto' ? 'ROBO CONFIRMADO' : 'ANOMALÍA DETECTADA'}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {new Date(alerta.created_at).toLocaleTimeString('es-CL', {hour12: false})}
+                      </span>
+                    </div>
+                    
+                    <h3 className="font-bold text-sm text-slate-200 mt-2">{alerta.etiqueta}</h3>
+                    <p className="text-xs text-slate-400 mt-1 line-clamp-2">
+                      {alerta.descripcion}
+                    </p>
+
+                    {/* Esperando validación del Guardia en Telegram */}
+                    {alerta.estado_validacion === 'pendiente' && (
+                      <div className="mt-3 pt-3 border-t border-slate-800 flex items-center justify-center gap-2 text-slate-500 bg-slate-950/50 p-2 rounded-sm">
+                        <Smartphone size={14} className="animate-pulse text-amber-500" />
+                        <span className="text-[9px] uppercase tracking-widest font-mono">Esperando decisión en Telegram...</span>
+                      </div>
+                    )}
                   </div>
-                  <h3 className="font-bold text-sm mb-1">{alerta.etiqueta}</h3>
-                  <p className="text-xs text-slate-400 leading-relaxed italic">
-                    &quot;{alerta.descripcion}&quot;
-                  </p>
+
+                  {/* Expansión Forense (Solo cuando Telegram aprueba el Riesgo Alto) */}
+                  {alerta.estado_validacion === 'riesgo_alto' && (
+                    <div className="bg-black/50 border-t border-red-900/50 p-3">
+                      <div className="aspect-video bg-slate-900 border border-slate-800 rounded-sm mb-3 relative overflow-hidden">
+                        <img 
+                          src={alerta.imagen_url || "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=400"} 
+                          alt="Evidencia Forense" 
+                          className="w-full h-full object-cover opacity-80"
+                        />
+                        <div className="absolute bottom-1 right-1 bg-black/80 px-1.5 py-0.5 border border-slate-700 rounded-sm">
+                          <span className="text-[8px] font-mono text-slate-400">EVIDENCIA.JPG</span>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-900 border-l-2 border-red-500 p-2.5 rounded-r-sm">
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <FileText size={12} className="text-slate-400" />
+                          <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Perfil Forense Gemini Flash</span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed font-mono">
+                          {alerta.descripcion_ia || "Generando perfil forense desde la nube..."}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))
             )}

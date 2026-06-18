@@ -91,7 +91,7 @@ model_pose = YOLO(str(BASE_DIR / 'models' / 'yolov8m-pose.pt')) # Carga el cereb
 
 qr_detector = cv2.QRCodeDetector()            # Enciende el escáner especial para leer los códigos QR del personal
 
-ESTANTE_ROI = [450, 100, 630, 450]            # Dibuja una caja imaginaria en la pantalla que define la zona de peligro (el estante)
+ESTANTE_ROI = [950, 320, 1250, 640]            # Dibuja una caja imaginaria en la pantalla que define la zona de peligro (el estante)
 
 fuente_env = os.getenv("WEBCAM_INDEX", "0")   # Revisa si le dijiste al sistema qué cámara usar en el .env
 
@@ -116,7 +116,11 @@ class CamaraAsincrona:                        # Crea un trabajador especial dedi
         else:                                 # Si es una cámara por internet...
             self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG) # ...se conecta a la red usando herramientas especiales para evitar lag
             
-        self.ret, self.frame = self.cap.read() # Saca la primera foto de prueba
+        # 🚀 LA SOLUCIÓN DEL HARDWARE: Obligar a Windows a usar HD Panorámico sin recortes
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            
+        self.ret, self.frame = self.cap.read() # Saca la primera foto de prueba (ahora será panorámica)
         self.corriendo = True                 # Le dice al trabajador que su turno comenzó
         self.hilo = threading.Thread(target=self._actualizar, daemon=True) # Lo manda a hacer su trabajo en segundo plano
         self.hilo.start()                     # Le da la orden de partir
@@ -375,11 +379,11 @@ def bucle_vigilancia():
  
     cap = CamaraAsincrona(fuente_video)
  
-    # ---- RESOLUCIÓN (inferencia reducida para mayor FPS incluso con GPU) ----
-    INF_W, INF_H   = 320, 240
-    DISP_W, DISP_H = 640, 480
-    ESCALA_X = DISP_W / INF_W   # = 2.0
-    ESCALA_Y = DISP_H / INF_H   # = 2.0
+    # ---- RESOLUCIÓN (Panorámico 16:9 Real) ----
+    INF_W, INF_H   = 640, 360  # La IA analiza en panorámico
+    DISP_W, DISP_H = 1280, 720 # Se dibuja en panorámico gigante
+    ESCALA_X = DISP_W / INF_W   
+    ESCALA_Y = DISP_H / INF_H
  
     # ---- CONTADORES ----
     frames_ocultamiento_confirmado = 0
@@ -405,7 +409,23 @@ def bucle_vigilancia():
  
     # ---- STOCK BASE ----
     stock_estante_congelado = 0
-    frames_para_nuevo_stock = 0  #Para evitar el stock fantasma
+    frames_para_nuevo_stock = 0
+ 
+    # ---- ESTILOS DE TEXTO UI ----
+    fuente    = cv2.FONT_HERSHEY_DUPLEX
+    suavizado = cv2.LINE_AA
+
+    # ---- TAMAÑOS DE FUENTE PARA 1280x720 ----
+    F_GRANDE  = 0.85   # Título principal (estado del sistema)
+    F_MEDIO   = 0.65   # Subtítulo / HUD secundario
+    F_PEQUEÑO = 0.50   # Etiquetas sobre bounding boxes
+    GROSOR_TITULO = 2
+    GROSOR_HUD    = 1
+
+    # ---- POSICIONES Y DE TEXTO EN LA BARRA NEGRA (altura 80px) ----
+    Y_LINEA_1 = 32     # Primera línea (estado principal)
+    Y_LINEA_2 = 62     # Segunda línea (datos de stock / HUD)
+    X_TEXTO   = 20     # Margen izquierdo de todos los textos
  
     # ---- ROI ESCALADO A RESOLUCIÓN DE INFERENCIA ----
     ROI_INF = [
@@ -416,7 +436,7 @@ def bucle_vigilancia():
     ]
  
     print("[SISTEMA] SmartGuard Biometrico v7.1 Activado.")
-    print("[SISTEMA] GPU activa | Torso adaptativo corregido | Filtro COCO limpio.")
+    print("[SISTEMA] GPU activa | Torso adaptativo corregido | Filtro COCO limpio | UI HD.")
  
     while cap.corriendo and sistema_activo:
  
@@ -425,16 +445,16 @@ def bucle_vigilancia():
             time.sleep(0.03)
             continue
  
-        frame     = cv2.resize(frame, (DISP_W, DISP_H))  
-        frame_inf = cv2.resize(frame, (INF_W,  INF_H))   
+        frame     = cv2.resize(frame, (DISP_W, DISP_H))
+        frame_inf = cv2.resize(frame, (INF_W,  INF_H))
         FRAME_ACTUAL += 1
  
         # ========================================================
         # FASE 0: CALENTAMIENTO
         # ========================================================
         if FRAME_ACTUAL < FRAMES_DE_CALENTAMIENTO:
-            cv2.putText(frame, "CALIBRANDO SENSORES...", (30, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(frame, "CALIBRANDO SENSORES...", (X_TEXTO, Y_LINEA_1),
+                        fuente, F_GRANDE, (0, 255, 255), GROSOR_TITULO, suavizado)
             with lock_frame:
                 ultimo_frame_procesado = frame.copy()
             time.sleep(0.03)
@@ -462,7 +482,8 @@ def bucle_vigilancia():
             frames_sin_faltante            = 0
             stock_estante_congelado        = 0
             cv2.rectangle(frame, (0, 0), (DISP_W, 80), (0, 0, 0), -1)
-            cv2.putText(frame, "MODO REPOSICION: VIGILANCIA PASIVA", (10, 35), 1, 1.2, (0, 140, 255), 2)
+            cv2.putText(frame, "MODO REPOSICION: VIGILANCIA PASIVA",
+                        (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 140, 255), GROSOR_TITULO, suavizado)
             cv2.rectangle(frame,
                           (ESTANTE_ROI[0], ESTANTE_ROI[1]),
                           (ESTANTE_ROI[2], ESTANTE_ROI[3]), (0, 140, 255), 1)
@@ -474,7 +495,7 @@ def bucle_vigilancia():
         # ========================================================
         # FASE 2: DETECCIÓN DE OBJETOS
         # ========================================================
-        obj_results = model_obj.track(frame_inf, persist=True, conf=0.35, verbose=False)
+        obj_results = model_obj.track(frame_inf, persist=True, conf=0.25, verbose=False)
  
         botellas_en_estante   = 0
         botella_visible_fuera = False
@@ -498,11 +519,11 @@ def bucle_vigilancia():
                     if colision_cajas(box_inf_int, ROI_INF):
                         cliente_en_zona = True
                         cv2.rectangle(frame, (xd1, yd1), (xd2, yd2), (0, 255, 255), 2)
-                        cv2.putText(frame, "CLIENTE EN ZONA", (xd1, yd1 - 10), 1, 1.2, (0, 255, 255), 2)
+                        cv2.putText(frame, "CLIENTE EN ZONA",
+                                    (xd1, max(20, yd1 - 10)), fuente, F_PEQUEÑO, (0, 255, 255), GROSOR_HUD, suavizado)
                     else:
                         cv2.rectangle(frame, (xd1, yd1), (xd2, yd2), (0, 150, 150), 1)
  
-                # 🚀 SOLUCIÓN BUG 1: Filtro estricto COCO. 39=Botella, 41=Taza/Vaso. (Eliminamos 67 y 73)
                 elif cls in [39, 41]:
                     if colision_cajas(box_inf_int, ROI_INF):
                         botellas_en_estante += 1
@@ -522,12 +543,11 @@ def bucle_vigilancia():
         # ========================================================
         if botellas_en_estante > stock_estante_congelado:
             frames_para_nuevo_stock += 1
-            if frames_para_nuevo_stock >= 10:  # 🚀 Requiere ~0.5s visualizando el nuevo producto
+            if frames_para_nuevo_stock >= 10:
                 stock_estante_congelado = botellas_en_estante
                 frames_para_nuevo_stock = 0
                 print(f"[STOCK] Nuevo maximo confirmado en estante: {stock_estante_congelado}")
         else:
-            # Si fue un parpadeo fantasma y volvió a 1, reseteamos el contador
             frames_para_nuevo_stock = 0
  
         # ========================================================
@@ -555,9 +575,10 @@ def bucle_vigilancia():
         if not faltante_en_estante and not memoria_toco_estante:
             if frames_ocultamiento_confirmado > 0:
                 frames_ocultamiento_confirmado = max(0, frames_ocultamiento_confirmado - 2)
-            cv2.putText(frame, "MONITOREO PASIVO...", (10, 40), 1, 1.2, (255, 255, 255), 2)
+            cv2.putText(frame, "MONITOREO PASIVO...",
+                        (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (255, 255, 255), GROSOR_TITULO, suavizado)
             cv2.putText(frame, f"STOCK BASE: {stock_estante_congelado} | EN REPISA: {botellas_en_estante}",
-                        (10, 65), 1, 0.9, (0, 255, 0), 2)
+                        (X_TEXTO, Y_LINEA_2), fuente, F_MEDIO, (0, 255, 0), GROSOR_HUD, suavizado)
  
         # ESTADO 2: BIOMETRÍA ACTIVA
         else:
@@ -588,36 +609,33 @@ def bucle_vigilancia():
                 dist_hombro_cadera = abs(min(l_sh[1], r_sh[1]) - max(l_hip[1], r_hip[1]))
                 centro_x           = (l_sh[0] + r_sh[0]) / 2.0
                 offset_y           = 5
-                radio_bolsillo     = 18   # en escala INF
+                radio_bolsillo     = 18
  
                 esta_de_lado = distancia_hombros < (dist_hombro_cadera * UMBRAL_LADO)
  
                 if esta_de_lado:
-                    # 🚀 FIX DIRECCIONAL: Saber hacia dónde está mirando el cliente
-                    conf_izq = kpts_conf[5]  # Confianza del hombro izquierdo
-                    conf_der = kpts_conf[6]  # Confianza del hombro derecho
-                    
+                    conf_izq = kpts_conf[5]
+                    conf_der = kpts_conf[6]
+ 
                     ancho_pecho = dist_hombro_cadera * 0.45
-                    
+ 
                     if conf_izq > conf_der:
-                        # Mira hacia la izquierda de la pantalla. El pecho está hacia la izquierda (-X)
                         hombro_visible_x = l_sh[0]
-                        min_x_torso = hombro_visible_x - (ancho_pecho * 1.3) # Proyecta el pecho hacia adelante
-                        max_x_torso = hombro_visible_x + (ancho_pecho * 0.2) # Apenas cubre la espalda
+                        min_x_torso = hombro_visible_x - (ancho_pecho * 1.3)
+                        max_x_torso = hombro_visible_x + (ancho_pecho * 0.2)
                     else:
-                        # Mira hacia la derecha de la pantalla. El pecho está hacia la derecha (+X)
                         hombro_visible_x = r_sh[0]
-                        min_x_torso = hombro_visible_x - (ancho_pecho * 0.2) # Apenas cubre la espalda
-                        max_x_torso = hombro_visible_x + (ancho_pecho * 1.3) # Proyecta el pecho hacia adelante
-
-                    # Altura (se mantiene la calibración perfecta que ya logramos)
+                        min_x_torso = hombro_visible_x - (ancho_pecho * 0.2)
+                        max_x_torso = hombro_visible_x + (ancho_pecho * 1.3)
+ 
                     min_y_torso = min(l_sh[1], r_sh[1]) + (dist_hombro_cadera * 0.05)
                     max_y_torso = max(l_hip[1], r_hip[1]) - (dist_hombro_cadera * 0.15)
  
                     bolsillo_izq = (l_hip[0], l_hip[1] + offset_y)
                     bolsillo_der = (r_hip[0], r_hip[1] + offset_y)
  
-                    cv2.putText(frame, "MODO LATERAL", (DISP_W - 160, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 100, 0), 1)
+                    cv2.putText(frame, "MODO LATERAL",
+                                (DISP_W - 200, Y_LINEA_1), fuente, F_MEDIO, (255, 100, 0), GROSOR_HUD, suavizado)
  
                 else:
                     # ---- MODO FRONTAL ----
@@ -660,50 +678,50 @@ def bucle_vigilancia():
                     if en_estante:
                         memoria_toco_estante = True
                         frames_sin_faltante  = 0
-                        cv2.circle(frame, (wx_d, wy_d), 8, (255, 0, 255), -1)      
+                        cv2.circle(frame, (wx_d, wy_d), 8, (255, 0, 255), -1)
  
                     elif en_torso or en_bolsillo:
                         if memoria_toco_estante and faltante_en_estante and not botella_visible_fuera:
                             manos_en_peligro = True
-                            cv2.circle(frame, (wx_d, wy_d), 8, (0, 0, 255), -1)    
+                            cv2.circle(frame, (wx_d, wy_d), 8, (0, 0, 255), -1)
                         else:
-                            cv2.circle(frame, (wx_d, wy_d), 6, (255, 255, 0), -1)  
+                            cv2.circle(frame, (wx_d, wy_d), 6, (255, 255, 0), -1)
  
                     else:
-                        cv2.circle(frame, (wx_d, wy_d), 6, (0, 255, 0), -1)        
+                        cv2.circle(frame, (wx_d, wy_d), 6, (0, 255, 0), -1)
  
-            # ---- GATILLO ANTI-PARPADEO CON CONFIANZA DE KEYPOINTS ----
+            # ---- GATILLO ANTI-PARPADEO ----
             if manos_en_peligro:
                 frames_ocultamiento_confirmado += 1
                 cv2.putText(frame,
                             f"ALERTA HURTO ({frames_ocultamiento_confirmado}/{UMBRAL_GATILLO})",
-                            (10, 40), 1, 1.2, (0, 0, 255), 2)
+                            (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 0, 255), GROSOR_TITULO, suavizado)
  
             elif not esqueleto_confiable:
                 cv2.putText(frame, "ESQUELETO PARCIAL: BARRA CONGELADA",
-                            (10, 40), 1, 1.0, (0, 100, 255), 2)
+                            (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 100, 255), GROSOR_HUD, suavizado)
  
             else:
                 frames_ocultamiento_confirmado = max(0, frames_ocultamiento_confirmado - 2)
  
                 if faltante_en_estante and botella_visible_fuera:
                     cv2.putText(frame, "CLIENTE SOSTIENE PRODUCTO (SEGURO)",
-                                (10, 40), 1, 1.2, (0, 255, 255), 2)
+                                (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 255, 255), GROSOR_HUD, suavizado)
                 elif faltante_en_estante and not botella_visible_fuera and memoria_toco_estante:
                     cv2.putText(frame, "ANALISIS ACTIVO: BUSCANDO MANOS",
-                                (10, 40), 1, 1.2, (255, 100, 0), 2)
+                                (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (255, 100, 0), GROSOR_HUD, suavizado)
                 elif memoria_toco_estante:
                     cv2.putText(frame, "SEGUIMIENTO BIOMETRICO ACTIVO",
-                                (10, 40), 1, 1.2, (0, 165, 255), 2)
+                                (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 165, 255), GROSOR_HUD, suavizado)
                 else:
                     cv2.putText(frame, "ZONA BLOQUEADA (OCLUSION)",
-                                (10, 40), 1, 1.2, (0, 165, 255), 2)
+                                (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 165, 255), GROSOR_HUD, suavizado)
  
             cv2.putText(frame,
                         f"STOCK: {stock_estante_congelado} | REPISA: {botellas_en_estante} | "
                         f"FUERA: {botella_visible_fuera} | SKEL: {esqueleto_confiable} | "
                         f"LADO: {esta_de_lado}",
-                        (10, 65), 1, 0.7, (180, 180, 180), 1)
+                        (X_TEXTO, Y_LINEA_2), fuente, F_MEDIO, (180, 180, 180), GROSOR_HUD, suavizado)
  
         # ========================================================
         # FASE 6: GATILLO FINAL → TELEGRAM
@@ -728,7 +746,7 @@ def bucle_vigilancia():
             ultimo_frame_procesado = frame.copy()
         time.sleep(0.01)
  
-    cap.release()                                                           # Apaga la cámara al terminar                                                             # Apaga la cámara al terminar el turno
+    cap.release()                                                     # Apaga la cámara al terminar                                                             # Apaga la cámara al terminar el turno
 
 # ==========================================
 # CONTROL DE CICLO DE VIDA DEL SERVIDOR

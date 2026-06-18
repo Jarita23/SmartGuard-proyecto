@@ -2,6 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from './supabase';
 import { Shield, Bell, Camera, CheckCircle, Activity, AlertTriangle, FileText, Smartphone } from 'lucide-react';
 
+// 🚀 CONFIGURACIÓN DE DESPLIEGUE HÍBRIDO (Inyectado)
+// Vercel usará la variable de entorno, y en local usará el 127.0.0.1 por defecto.
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 function App() {
   const [alertas, setAlertas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,8 +85,9 @@ function App() {
             
             <div className="aspect-video bg-black relative group flex items-center justify-center">
               <div className="absolute inset-0 opacity-10 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]"></div>
+              {/* 🚀 MODIFICADO: Ahora el feed de video usa la variable de entorno */}
               <img 
-                src="http://127.0.0.1:8000/video_feed" 
+                src={`${API_BASE_URL}/video_feed`} 
                 alt="Feed CAM-01" 
                 className="w-full h-full object-contain" 
               />

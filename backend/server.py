@@ -15,6 +15,8 @@ import requests                               # Es el "cartero" virtual que env�
 import asyncio                                # Permite que el video en vivo fluya sin congelar el resto del programa
 import math                                   # Calculadora interna para medir distancias corporales (ej. mano al bolsillo)
 import hashlib                                # Crea un sello de seguridad único (huella digital) para blindar la evidencia
+from fastapi import FastAPI                   # El motor web principal que permite que internet se conecte con este código
+from fastapi.middleware.cors import CORSMiddleware # Un portero que decide qué páginas web externas tienen permiso para entrar
 
 # ==========================================
 # STREAMING ENDPOINT CON UX DEFENSIVA
@@ -23,6 +25,7 @@ import numpy as np                            # Herramienta matemática que ayud
 from pathlib import Path                      # Se encarga de buscar y unir las carpetas de tus archivos sin perderse
 from pydantic import BaseModel, HttpUrl       # Un guardia de seguridad que revisa que los datos que entran sean correctos
 from typing import Optional, Dict, Any        # Etiquetas para mantener el código ordenado y saber qué tipo de dato es cada cosa
+
 
 # ==========================================
 # CARGA BLINDADA DE VARIABLES DE ENTORNO
@@ -86,8 +89,8 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}" # Arma la dir
 # ==========================================
 # VARIABLES GLOBALES Y CONTROL DE ESTADO
 # ==========================================
-model_obj = YOLO(str(BASE_DIR / 'models' / 'yolov8m.pt')) # Carga el cerebro visual que sabe reconocer objetos cotidianos
-model_pose = YOLO(str(BASE_DIR / 'models' / 'yolov8m-pose.pt')) # Carga el cerebro visual que sabe leer el esqueleto humano
+model_obj = YOLO(str(BASE_DIR / 'models' / 'yolov8m.pt')).to('cuda')# Carga el cerebro visual que sabe reconocer objetos cotidianos
+model_pose = YOLO(str(BASE_DIR / 'models' / 'yolov8m-pose.pt')).to('cuda') # Carga el cerebro visual que sabe leer el esqueleto humano
 
 qr_detector = cv2.QRCodeDetector()            # Enciende el escáner especial para leer los códigos QR del personal
 
@@ -445,7 +448,11 @@ def bucle_vigilancia():
             time.sleep(0.03)
             continue
  
-        frame     = cv2.resize(frame, (DISP_W, DISP_H))
+        # 🚀 OPTIMIZACIÓN: Solo redimensiona el display si la cámara entrega un tamaño distinto a 1280x720
+        if frame.shape[1] != DISP_W or frame.shape[0] != DISP_H:
+            frame = cv2.resize(frame, (DISP_W, DISP_H))
+            
+        # Creamos la imagen de inferencia panorámica reducida para YOLO (640x360)
         frame_inf = cv2.resize(frame, (INF_W,  INF_H))
         FRAME_ACTUAL += 1
  

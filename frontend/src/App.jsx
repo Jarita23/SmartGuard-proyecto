@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from './supabase'; // Ajusta la ruta si es necesario
-import Login from './components/Login'; // Importamos el muro de seguridad
+import { supabase } from './supabase'; 
+import Login from './components/Login'; 
 import { Shield, Bell, Camera, CheckCircle, Activity, AlertTriangle, FileText, Smartphone, LogOut } from 'lucide-react';
 
 // 🚀 CONFIGURACIÓN DE DESPLIEGUE HÍBRIDO (Inyectado)
-// Vercel usará la variable de entorno, y en local usará el 127.0.0.1 por defecto.
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 function App() {
@@ -16,15 +15,18 @@ function App() {
   const [alertas, setAlertas] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // EFECTO 1: Control de Seguridad (Autenticación)
+  // EFECTO 1: Control de Seguridad Estricto (Amnesia de Sesión)
   useEffect(() => {
-    // Revisa si ya hay una sesión guardada al abrir la página
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    // 1. Destruimos activamente cualquier sesión en caché al cargar la página
+    const wipeSession = async () => {
+      await supabase.auth.signOut();
+      setSession(null);
       setIsAuthLoading(false);
-    });
+    };
+    
+    wipeSession();
 
-    // Escucha si el usuario inicia o cierra sesión en tiempo real
+    // 2. Escucha si el operador inicia sesión a través del componente Login
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -34,9 +36,9 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // EFECTO 2: Carga de Datos (Solo corre si hay sesión, pero lo dejamos montado)
+  // EFECTO 2: Carga de Datos 
   useEffect(() => {
-    if (!session) return; // Si no hay sesión, no intentamos descargar alertas
+    if (!session) return; 
 
     const fetchAlertas = async () => {
       const { data } = await supabase
@@ -60,19 +62,17 @@ function App() {
         audio.play().catch(() => console.log('Autoplay bloqueado'));
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'alertas' }, (payload) => {
-        // Cuando Telegram actualiza a 'riesgo_alto' o a 'falsa_alarma'
         setAlertas((current) => current.map(a => a.id === payload.new.id ? payload.new : a));
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'alertas' }, (payload) => {
-        // Por si alguna vez borran la fila manualmente desde Supabase
         setAlertas((current) => current.filter(a => a.id !== payload.old.id));
       })
       .subscribe();
 
     return () => supabase.removeChannel(channel);
-  }, [session]); // Depende de la sesión para activarse
+  }, [session]); 
 
-  // Función para cerrar sesión
+  // Función para cerrar sesión manualmente (Mantenida por si acaso)
   const handleLogout = async () => {
     await supabase.auth.signOut();
   };
@@ -116,7 +116,6 @@ function App() {
           </div>
           <div className="text-slate-500 uppercase tracking-widest font-mono">Central Maule</div>
           
-          {/* BOTÓN DE CIERRE DE SESIÓN */}
           <button 
             onClick={handleLogout}
             className="flex items-center gap-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 px-2 py-1 rounded-sm transition-colors ml-2"

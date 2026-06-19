@@ -1,16 +1,43 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from './supabase';
-import { Shield, Bell, Camera, CheckCircle, Activity, AlertTriangle, FileText, Smartphone } from 'lucide-react';
+import { supabase } from './supabase'; // Ajusta la ruta si es necesario
+import Login from './components/Login'; // Importamos el muro de seguridad
+import { Shield, Bell, Camera, CheckCircle, Activity, AlertTriangle, FileText, Smartphone, LogOut } from 'lucide-react';
 
 // 🚀 CONFIGURACIÓN DE DESPLIEGUE HÍBRIDO (Inyectado)
 // Vercel usará la variable de entorno, y en local usará el 127.0.0.1 por defecto.
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 function App() {
+  // Estados de Autenticación
+  const [session, setSession] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  // Estados del Dashboard
   const [alertas, setAlertas] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // EFECTO 1: Control de Seguridad (Autenticación)
   useEffect(() => {
+    // Revisa si ya hay una sesión guardada al abrir la página
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setIsAuthLoading(false);
+    });
+
+    // Escucha si el usuario inicia o cierra sesión en tiempo real
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // EFECTO 2: Carga de Datos (Solo corre si hay sesión, pero lo dejamos montado)
+  useEffect(() => {
+    if (!session) return; // Si no hay sesión, no intentamos descargar alertas
+
     const fetchAlertas = async () => {
       const { data } = await supabase
         .from('alertas')
@@ -43,11 +70,34 @@ function App() {
       .subscribe();
 
     return () => supabase.removeChannel(channel);
-  }, []);
+  }, [session]); // Depende de la sesión para activarse
 
-  // FILTRO INTELIGENTE: Ocultamos de la pantalla las falsas alarmas, pero siguen existiendo en la BD por auditoría
+  // Función para cerrar sesión
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  // FILTRO INTELIGENTE
   const alertasVisibles = alertas.filter(a => a.estado_validacion !== 'falsa_alarma');
 
+  // BARRERA DE SEGURIDAD 1: Cargando Estado Inicial
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-[#050914] flex justify-center items-center">
+        <div className="flex flex-col items-center gap-4">
+          <Shield className="w-12 h-12 text-red-600 animate-pulse" />
+          <p className="text-red-600 tracking-widest text-sm font-mono">INICIALIZANDO SISTEMA...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // BARRERA DE SEGURIDAD 2: No autorizado
+  if (!session) {
+    return <Login />;
+  }
+
+  // BARRERA SUPERADA: Dibuja el Dashboard
   return (
     <div className="min-h-screen bg-[#0a0f18] text-slate-200 font-sans selection:bg-red-500/30">
       <header className="border-b border-slate-800 bg-[#0d131f] p-3 sticky top-0 z-10 flex justify-between items-center shadow-md">
@@ -59,11 +109,22 @@ function App() {
             SmartGuard <span className="text-red-500 text-xs font-mono ml-1">LIVE v2.5</span>
           </h1>
         </div>
+        
         <div className="flex items-center gap-4 text-xs font-medium mr-4">
           <div className="flex items-center gap-1.5 text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-2 py-1 rounded-sm">
             <Activity size={14} /> LINK SECURE
           </div>
           <div className="text-slate-500 uppercase tracking-widest font-mono">Central Maule</div>
+          
+          {/* BOTÓN DE CIERRE DE SESIÓN */}
+          <button 
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 px-2 py-1 rounded-sm transition-colors ml-2"
+            title="Desconectar Operador"
+          >
+            <LogOut size={14} />
+            <span className="hidden md:inline uppercase tracking-widest font-mono text-[10px]">Salir</span>
+          </button>
         </div>
       </header>
 
@@ -85,7 +146,7 @@ function App() {
             
             <div className="aspect-video bg-black relative group flex items-center justify-center">
               <div className="absolute inset-0 opacity-10 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]"></div>
-              {/* 🚀 MODIFICADO: Ahora el feed de video usa la variable de entorno */}
+              {/* Feed de video */}
               <img 
                 src={`${API_BASE_URL}/video_feed`} 
                 alt="Feed CAM-01" 
@@ -153,7 +214,7 @@ function App() {
                     )}
                   </div>
 
-                  {/* Expansión Forense (Solo cuando Telegram aprueba el Riesgo Alto) */}
+                  {/* Expansión Forense */}
                   {alerta.estado_validacion === 'riesgo_alto' && (
                     <div className="bg-black/50 border-t border-red-900/50 p-3">
                       <div className="aspect-video bg-slate-900 border border-slate-800 rounded-sm mb-3 relative overflow-hidden">

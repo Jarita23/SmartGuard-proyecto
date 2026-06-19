@@ -3,8 +3,10 @@
 # ==========================================
 import os                                     # Trae herramientas básicas para que el código hable con tu computador
 import sys                                    # Permite interactuar con configuraciones profundas del programa
-os.environ["OPENCV_FFMPEG_THREADS"] = "1"     # Evita que el video se tranque limitando el esfuerzo de la tarjeta gráfica
+os.environ["OPENCV_FFMPEG_THREADS"] = "1"     
 
+#  BANDERA DE ULTRA BAJA LATENCIA: Dile a FFmpeg que destruya el buffer de red
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|fflags;nobuffer|flags;low_delay|max_delay;500000"
 import cv2                                    # Son los "ojos" del programa, lee y dibuja sobre las imágenes de la cámara
 import io                                     # Ayuda a manejar las imágenes temporalmente en la memoria del computador
 import time                                   # Reloj interno para medir pausas y saber a qué hora exacta ocurrió un evento
@@ -87,7 +89,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") # Identifica a qué grupo espec
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}" # Arma la dirección web exacta para mandarle órdenes al bot
 
 # ==========================================
-# VARIABLES GLOBALES Y CONTROL DE ESTADO
+# VARIABLES GLOBALES ENTRADA Y CONTROL DE ESTADO
 # ==========================================
 model_obj = YOLO(str(BASE_DIR / 'models' / 'yolov8m.pt')).to('cuda')# Carga el cerebro visual que sabe reconocer objetos cotidianos
 model_pose = YOLO(str(BASE_DIR / 'models' / 'yolov8m-pose.pt')).to('cuda') # Carga el cerebro visual que sabe leer el esqueleto humano
@@ -112,42 +114,42 @@ ultimo_disparo = 0.0                          # Recuerda a qué hora fue la últ
 
 modo_reposicion = False                       # Interruptor logístico: si dice True, es porque entró un trabajador a reponer cosas
 
-class CamaraAsincrona:                        # Crea un trabajador especial dedicado única y exclusivamente a mirar la cámara
-    def __init__(self, src):                  # Instrucciones para cuando el trabajador empieza su turno
-        if isinstance(src, int):              # Si la cámara es local...
-            self.cap = cv2.VideoCapture(src)  # ...enciende la cámara del notebook
-        else:                                 # Si es una cámara por internet...
-            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG) # ...se conecta a la red usando herramientas especiales para evitar lag
+class CamaraAsincrona:                        
+    def __init__(self, src):                  
+        if isinstance(src, int):              
+            self.cap = cv2.VideoCapture(src)  
+        else:                                 
+            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG) 
             
-        # 🚀 LA SOLUCIÓN DEL HARDWARE: Obligar a Windows a usar HD Panorámico sin recortes
+        # 🚀 Obligar a la cámara a mantener solo el último frame vivo en memoria
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             
-        self.ret, self.frame = self.cap.read() # Saca la primera foto de prueba (ahora será panorámica)
-        self.corriendo = True                 # Le dice al trabajador que su turno comenzó
-        self.hilo = threading.Thread(target=self._actualizar, daemon=True) # Lo manda a hacer su trabajo en segundo plano
-        self.hilo.start()                     # Le da la orden de partir
+        self.ret, self.frame = self.cap.read() 
+        self.corriendo = True                 
+        self.hilo = threading.Thread(target=self._actualizar, daemon=True) 
+        self.hilo.start()                     
 
-    def _actualizar(self):                    # El trabajo repetitivo que hace este trabajador
-        while self.corriendo:                 # Mientras esté en su turno...
-            try:                              # ...intenta hacer lo siguiente:
-                ret, frame = self.cap.read()  # ...sacar una foto nueva de la cámara
-                if ret:                       # ...si la foto salió bien:
-                    self.ret = ret            # ...avisa que hubo éxito
-                    self.frame = frame        # ...y guarda la foto fresca
-                time.sleep(0.03)              # ...descansa un par de milisegundos para no quemar el procesador del computador
-            except Exception:                 # Si algo explota (se corta el internet o el cable)...
-                break                         # ...deja de intentar y renuncia al trabajo
+    def _actualizar(self):                    
+        while self.corriendo:                 
+            try:                              
+                # 🚀 TÁCTICA DE VACIADO RAPIDO: .grab() vacía el buffer de red instantáneamente
+                if not self.cap.grab():
+                    time.sleep(0.01)
+                    continue
+                
+                # .retrieve() solo decodifica el frame más fresco que existe en el milisegundo actual
+                ret, frame = self.cap.retrieve()  
+                if ret:                           
+                    self.ret = ret            
+                    self.frame = frame        
+            except Exception:                 
+                break                         
 
-    def read(self):                           # Si el programa principal le pide la foto a este trabajador...
-        return self.ret, self.frame.copy() if self.ret else None # ...le entrega una copia exacta de la última foto buena
-
-    def release(self):                        # Cuando queremos que el trabajador termine su turno y se vaya
-        self.corriendo = False                # Le dice que ya no corra más
-        if self.hilo.is_alive():              # Si el trabajador sigue haciendo cosas...
-            self.hilo.join(timeout=1.0)       # ...le da 1 segundo de gracia para que termine
-        self.cap.release()                    # Apaga el lente de la cámara físicamente
-
+    def read(self):                           
+        return self.ret, self.frame.copy() if self.ret else None
 # ==========================================
 # FLUJO PIPELINE: REGISTRO, STORAGE Y TELEGRAM
 # ==========================================
@@ -249,8 +251,8 @@ def ejecutar_perfilamiento_forense(alerta_id, nombre_archivo): # Protocolo que s
         - Tipo y color de prendas superiores e inferiores (ej. Polerón negro con capucha, jeans azules).
         - Accesorios visibles (gorros, mascarillas, mochilas, bolsos).
         
-        Responde estrictamente en un máximo de 15 palabras. Ve directo al grano sin introducciones.
-        """                                   # Estas son las instrucciones estrictas que le damos a la IA para que analice la ropa
+        Responde estrictamente en un maximum de 15 palabras. Ve directo al grano sin introducciones.
+        """                                    # Estas son las instrucciones estrictas que le damos a la IA para que analice la ropa
         response = client.models.generate_content(model="gemini-2.5-flash", contents=[prompt, img]) # Manda la foto y las instrucciones a Google
         descripcion_forense = response.text.strip() # Recibe la respuesta de Google y le limpia los espacios en blanco
         
@@ -346,36 +348,7 @@ def bucle_telegram_polling():                 # Un vigilante que solo se dedica 
             time.sleep(3)                     # ...y espera 3 segundos para no quemar el servidor antes de reintentar
 
 # ==========================================
-# MOTOR BIOMÉTRICO LOCAL (EDGE) - v6.1
-#
-# CAMBIOS vs v6.0:
-#   [NEW] Inferencia en resolución reducida (320x240) para modelos M sin lag
-#   [NEW] Escalado de coordenadas de vuelta a 640x480 para dibujar correctamente
-#   [NEW] Opción 4: confianza de keypoints — si no ve las muñecas, congela la barra
-#         en lugar de bajarla (evita que el ladrón escape girándose de lado)
-#
-# LÓGICA MAESTRA DE HURTO (posicional, no por conteo):
-#   [1] memoria_toco_estante   → la mano tocó el ROI en algún momento
-#   [2] faltante_en_estante    → la botella ya no está en la repisa
-#   [3] not botella_visible_fuera → la botella no se ve en ningún otro lugar
-#                                   (la ocultó bajo la ropa, no la sostiene visible)
-# ==========================================
-# ==========================================
-# MOTOR BIOMÉTRICO LOCAL (EDGE) - v7.0
-#
-# CAMBIOS vs v6.1:
-#   [FIX]  GPU forzada via .to('cuda') en los modelos (fuera del bucle, en server.py)
-#   [NEW]  Detección de orientación lateral con ajuste dinámico del rectángulo de torso
-#          y bolsillos hacia el borde frontal del cuerpo (no el centro)
-#
-# LÓGICA MAESTRA DE HURTO (posicional):
-#   [1] memoria_toco_estante     → la mano tocó el ROI en algún momento
-#   [2] faltante_en_estante      → la botella ya no está en la repisa
-#   [3] not botella_visible_fuera → la botella no se ve en ningún lugar de la cámara
-#
-# ORIENTACIÓN:
-#   Si distancia_hombros < 25% de altura torso → persona de lado
-#   El torso y bolsillos se desplazan al borde frontal según el hombro más visible
+# MOTOR BIOMÉTRICO LOCAL (EDGE) - v7.1
 # ==========================================
 def bucle_vigilancia():
     global ultimo_frame_procesado, sistema_activo, ultimo_disparo, modo_reposicion
@@ -488,7 +461,7 @@ def bucle_vigilancia():
             memoria_toco_estante           = False
             frames_sin_faltante            = 0
             stock_estante_congelado        = 0
-            cv2.rectangle(frame, (0, 0), (DISP_W, 80), (0, 0, 0), -1)
+            #cv2.rectangle(frame, (0, 0), (DISP_W, 80), (0, 0, 0), -1)
             cv2.putText(frame, "MODO REPOSICION: VIGILANCIA PASIVA",
                         (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 140, 255), GROSOR_TITULO, suavizado)
             cv2.rectangle(frame,
@@ -543,7 +516,8 @@ def bucle_vigilancia():
             memoria_toco_estante = False
             frames_sin_faltante  = 0
  
-        cv2.rectangle(frame, (0, 0), (DISP_W, 80), (0, 0, 0), -1)
+        # 🚀 CORREGIDO: Comentamos de forma absoluta este rectángulo para evitar que tape el borde superior de tu cámara Dahua.
+        # cv2.rectangle(frame, (0, 0), (DISP_W, 80), (0, 0, 0), -1)
  
         # ========================================================
         # FASE 3: STOCK BASE (MÁXIMO HISTÓRICO CON ANTI-REBOTE)
@@ -553,7 +527,7 @@ def bucle_vigilancia():
             if frames_para_nuevo_stock >= 10:
                 stock_estante_congelado = botellas_en_estante
                 frames_para_nuevo_stock = 0
-                print(f"[STOCK] Nuevo maximo confirmado en estante: {stock_estante_congelado}")
+                print(f"[STOCK] Nuevo maximo confirmed en estante: {stock_estante_congelado}")
         else:
             frames_para_nuevo_stock = 0
  
@@ -758,7 +732,7 @@ def bucle_vigilancia():
             ultimo_frame_procesado = frame.copy()
         time.sleep(0.01)
  
-    cap.release()                                                     # Apaga la cámara al terminar                                                             # Apaga la cámara al terminar el turno
+    cap.release()                                                                     # Apaga la cámara al terminar el turno
 
 # ==========================================
 # CONTROL DE CICLO DE VIDA DEL SERVIDOR

@@ -561,7 +561,12 @@ def bucle_vigilancia():
         # FASE 4: FALTANTE Y REGLA DE PERDÓN
         # ========================================================
         faltante_en_estante = (botellas_en_estante < stock_estante_congelado)
- 
+
+        # ACTIVACIÓN DIRECTA: si el cliente está en zona y desaparece la botella,
+        # asumimos que la agarró sin necesitar detectar la muñeca en el ROI
+        if faltante_en_estante and cliente_en_zona:
+            memoria_toco_estante = True
+
         if not faltante_en_estante and memoria_toco_estante:
             frames_sin_faltante += 1
             if frames_sin_faltante >= UMBRAL_PERDON:
@@ -673,7 +678,7 @@ def bucle_vigilancia():
                     if wx <= 0 or wy <= 0 or not wrist_ok:
                         continue
  
-                    en_estante  = colision_cajas([wx-3, wy-3, wx+3, wy+3], ROI_INF)
+                    en_estante  = colision_cajas([wx-15, wy-15, wx+15, wy+15], ROI_INF)
                     en_torso    = (min_x_torso <= wx <= max_x_torso and
                                    min_y_torso <= wy <= max_y_torso)
                     en_bolsillo = (math.hypot(wx - bolsillo_izq[0], wy - bolsillo_izq[1]) < radio_bolsillo or
@@ -681,7 +686,7 @@ def bucle_vigilancia():
  
                     wx_d = int(wx * ESCALA_X)
                     wy_d = int(wy * ESCALA_Y)
- 
+
                     if en_estante:
                         memoria_toco_estante = True
                         frames_sin_faltante  = 0

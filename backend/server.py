@@ -6,7 +6,7 @@ import sys                                    # Permite interactuar con configur
 os.environ["OPENCV_FFMPEG_THREADS"] = "1"     
 
 #  BANDERA DE ULTRA BAJA LATENCIA: Dile a FFmpeg que destruya el buffer de red
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|fflags;nobuffer|flags;low_delay|max_delay;500000"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;500000"
 import cv2                                    # Son los "ojos" del programa, lee y dibuja sobre las imágenes de la cámara
 import io                                     # Ayuda a manejar las imágenes temporalmente en la memoria del computador
 import time                                   # Reloj interno para medir pausas y saber a qué hora exacta ocurrió un evento
@@ -552,6 +552,7 @@ def bucle_vigilancia():
  
         manos_en_peligro    = False
         esqueleto_confiable = False
+        esta_de_lado        = False
  
         # ========================================================
         # FASE 5: MÁQUINA DE ESTADOS

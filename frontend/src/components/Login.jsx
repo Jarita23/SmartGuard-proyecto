@@ -37,7 +37,7 @@ export default function Login() {
             <Shield className="w-10 h-10 text-red-600" strokeWidth={1.5} />
           </div>
           <h1 className="text-2xl font-bold text-white tracking-widest">
-            SMARTGUARD <span className="text-red-600">ACCESS</span>
+            SMARTGUARD <span className="text-red-600">ACCESSO</span>
           </h1>
           <p className="text-gray-500 text-xs tracking-[0.2em] mt-2 uppercase">
             Central de Monitoreo Restringida

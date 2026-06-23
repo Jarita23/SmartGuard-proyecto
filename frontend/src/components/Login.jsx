@@ -100,7 +100,7 @@ export default function Login() {
 
         <div className="mt-8 text-center">
           <p className="text-gray-700 text-[10px] tracking-[0.3em] uppercase">
-            Sistema Encriptado End-to-End
+            
           </p>
         </div>
       </div>

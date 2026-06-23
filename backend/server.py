@@ -95,8 +95,7 @@ qr_detector = cv2.QRCodeDetector()
 
 ESTANTE_ROI = [950, 320, 1250, 640]
 
-# 👇 PASO 1 APLICADO AQUI: Eliminamos el forzado del "0" y fijamos la URL RTSP de la Dahua
-RTSP_URL = os.getenv("RTSP_URL", "rtsp://admin:admin123@192.168.18.232:554/cam/realmonitor?channel=1&subtype=1")
+RTSP_URL = os.getenv("RTSP_URL")
 
 print(f"[HARDWARE] SmartGuard configurado en modo: CAMARA IP DAHUA (RTSP) -> {RTSP_URL}")
 
@@ -263,7 +262,7 @@ def construir_informe_forense_mdv2(datos_ia: dict, camara_nombre: str) -> str:
 # ==========================================
 def ejecutar_perfilamiento_forense(alerta_id, nombre_archivo):
     print(f"[CLOUD] Activando Gemini para analisis forense estructurado del registro {alerta_id}...") 
-    try:                                      
+    try:                                          
         imagen_bytes = supabase.storage.from_("evidencia_biometrica").download(nombre_archivo) 
         img = PIL.Image.open(io.BytesIO(imagen_bytes)) 
 
@@ -283,7 +282,7 @@ def ejecutar_perfilamiento_forense(alerta_id, nombre_archivo):
             "confianza": "95"
         }
         No incluyas formato markdown de código (como ```json) en tu respuesta, solo el JSON puro.
-        """                                    
+        """                                        
         response = client.models.generate_content(model="gemini-2.5-flash", contents=[prompt, img]) 
         
         respuesta_cruda = response.text.strip().replace('```json', '').replace('```', '')
@@ -498,7 +497,7 @@ def bucle_vigilancia():
             time.sleep(0.01)
             continue
 
-        obj_results = model_obj.track(frame_inf, persist=True, conf=0.25, verbose=False)
+        obj_results = model_obj.track(frame_inf, persist=True, conf=0.15, classes=[0, 39], verbose=False)
 
         botellas_en_estante   = 0
         botella_visible_fuera = False
@@ -527,7 +526,7 @@ def bucle_vigilancia():
                     else:
                         cv2.rectangle(frame, (xd1, yd1), (xd2, yd2), (0, 150, 150), 1)
 
-                elif cls in [39, 41]:
+                elif cls == 39:
                     if colision_cajas(box_inf_int, ROI_INF):
                         botellas_en_estante += 1
                         cv2.rectangle(frame, (xd1, yd1), (xd2, yd2), (0, 255, 0), 2)
@@ -582,101 +581,107 @@ def bucle_vigilancia():
                 if r.keypoints is None or len(r.keypoints.xy) == 0:
                     continue
 
-                kpts      = r.keypoints.xy[0].cpu().numpy()
-                kpts_conf = r.keypoints.conf[0].cpu().numpy()
+                # REFACTORIZACIÓN MULTIHILO: Iteramos por cada individuo detectado
+                num_personas = len(r.keypoints.xy)
+                for p_idx in range(num_personas):
+                    kpts      = r.keypoints.xy[p_idx].cpu().numpy()
+                    kpts_conf = r.keypoints.conf[p_idx].cpu().numpy()
 
-                if len(kpts) < 13:
-                    continue
-
-                muneca_izq_ok       = kpts_conf[9]  > CONFIANZA_MIN_MUNECA
-                muneca_der_ok       = kpts_conf[10] > CONFIANZA_MIN_MUNECA
-                esqueleto_confiable = muneca_izq_ok or muneca_der_ok
-
-                l_sh,    r_sh    = kpts[5],  kpts[6]
-                l_wrist, r_wrist = kpts[9],  kpts[10]
-                l_hip,   r_hip   = kpts[11], kpts[12]
-
-                distancia_hombros  = abs(l_sh[0] - r_sh[0])
-                dist_hombro_cadera = abs(min(l_sh[1], r_sh[1]) - max(l_hip[1], r_hip[1]))
-                centro_x           = (l_sh[0] + r_sh[0]) / 2.0
-                offset_y           = 5
-                radio_bolsillo     = 18
-
-                esta_de_lado = distancia_hombros < (dist_hombro_cadera * UMBRAL_LADO)
-
-                if esta_de_lado:
-                    conf_izq = kpts_conf[5]
-                    conf_der = kpts_conf[6]
-
-                    ancho_pecho = dist_hombro_cadera * 0.45
-
-                    if conf_izq > conf_der:
-                        hombro_visible_x = l_sh[0]
-                        min_x_torso = hombro_visible_x - (ancho_pecho * 1.3)
-                        max_x_torso = hombro_visible_x + (ancho_pecho * 0.2)
-                    else:
-                        hombro_visible_x = r_sh[0]
-                        min_x_torso = hombro_visible_x - (ancho_pecho * 0.2)
-                        max_x_torso = hombro_visible_x + (ancho_pecho * 1.3)
-
-                    min_y_torso = min(l_sh[1], r_sh[1]) + (dist_hombro_cadera * 0.05)
-                    max_y_torso = max(l_hip[1], r_hip[1]) - (dist_hombro_cadera * 0.15)
-
-                    bolsillo_izq = (l_hip[0], l_hip[1] + offset_y)
-                    bolsillo_der = (r_hip[0], r_hip[1] + offset_y)
-
-                    cv2.putText(frame, "MODO LATERAL",
-                                (DISP_W - 200, Y_LINEA_1), fuente, F_MEDIO, (255, 100, 0), GROSOR_HUD, suavizado)
-
-                else:
-                    min_x_torso = centro_x - (distancia_hombros * 0.35)
-                    max_x_torso = centro_x + (distancia_hombros * 0.35)
-                    min_y_torso = min(l_sh[1], r_sh[1]) + (dist_hombro_cadera * 0.4)
-                    max_y_torso = max(l_hip[1], r_hip[1]) - 10
-                    bolsillo_izq = (l_hip[0], l_hip[1] + offset_y)
-                    bolsillo_der = (r_hip[0], r_hip[1] + offset_y)
-
-                if min_x_torso > 0 and min_y_torso > 0:
-                    cv2.rectangle(frame,
-                                (int(min_x_torso * ESCALA_X), int(min_y_torso * ESCALA_Y)),
-                                (int(max_x_torso * ESCALA_X), int(max_y_torso * ESCALA_Y)),
-                                (255, 255, 255), 1)
-                    cv2.circle(frame,
-                            (int(bolsillo_izq[0] * ESCALA_X), int(bolsillo_izq[1] * ESCALA_Y)),
-                            int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
-                    cv2.circle(frame,
-                            (int(bolsillo_der[0] * ESCALA_X), int(bolsillo_der[1] * ESCALA_Y)),
-                            int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
-
-                for wrist, wrist_ok in [(l_wrist, muneca_izq_ok), (r_wrist, muneca_der_ok)]:
-                    wx, wy = wrist
-
-                    if wx <= 0 or wy <= 0 or not wrist_ok:
+                    if len(kpts) < 13:
                         continue
 
-                    en_estante  = colision_cajas([wx-15, wy-15, wx+15, wy+15], ROI_INF)
-                    en_torso    = (min_x_torso <= wx <= max_x_torso and
-                                min_y_torso <= wy <= max_y_torso)
-                    en_bolsillo = (math.hypot(wx - bolsillo_izq[0], wy - bolsillo_izq[1]) < radio_bolsillo or
-                                math.hypot(wx - bolsillo_der[0], wy - bolsillo_der[1]) < radio_bolsillo)
+                    muneca_izq_ok       = kpts_conf[9]  > CONFIANZA_MIN_MUNECA
+                    muneca_der_ok       = kpts_conf[10] > CONFIANZA_MIN_MUNECA
+                    
+                    if muneca_izq_ok or muneca_der_ok:
+                        esqueleto_confiable = True
 
-                    wx_d = int(wx * ESCALA_X)
-                    wy_d = int(wy * ESCALA_Y)
+                    l_sh,    r_sh    = kpts[5],  kpts[6]
+                    l_wrist, r_wrist = kpts[9],  kpts[10]
+                    l_hip,   r_hip   = kpts[11], kpts[12]
 
-                    if en_estante:
-                        memoria_toco_estante = True
-                        frames_sin_faltante  = 0
-                        cv2.circle(frame, (wx_d, wy_d), 8, (255, 0, 255), -1)
+                    distancia_hombros  = abs(l_sh[0] - r_sh[0])
+                    dist_hombro_cadera = abs(min(l_sh[1], r_sh[1]) - max(l_hip[1], r_hip[1]))
+                    centro_x           = (l_sh[0] + r_sh[0]) / 2.0
+                    offset_y           = 5
+                    radio_bolsillo     = 18
 
-                    elif en_torso or en_bolsillo:
-                        if memoria_toco_estante and faltante_en_estante and not botella_visible_fuera:
-                            manos_en_peligro = True
-                            cv2.circle(frame, (wx_d, wy_d), 8, (0, 0, 255), -1)
+                    es_lateral = distancia_hombros < (dist_hombro_cadera * UMBRAL_LADO)
+
+                    if es_lateral:
+                        esta_de_lado = True
+                        conf_izq = kpts_conf[5]
+                        conf_der = kpts_conf[6]
+
+                        ancho_pecho = dist_hombro_cadera * 0.45
+
+                        if conf_izq > conf_der:
+                            hombro_visible_x = l_sh[0]
+                            min_x_torso = hombro_visible_x - (ancho_pecho * 1.3)
+                            max_x_torso = hombro_visible_x + (ancho_pecho * 0.2)
                         else:
-                            cv2.circle(frame, (wx_d, wy_d), 6, (255, 255, 0), -1)
+                            hombro_visible_x = r_sh[0]
+                            min_x_torso = hombro_visible_x - (ancho_pecho * 0.2)
+                            max_x_torso = hombro_visible_x + (ancho_pecho * 1.3)
+
+                        min_y_torso = min(l_sh[1], r_sh[1]) + (dist_hombro_cadera * 0.05)
+                        max_y_torso = max(l_hip[1], r_hip[1]) - (dist_hombro_cadera * 0.15)
+
+                        bolsillo_izq = (l_hip[0], l_hip[1] + offset_y)
+                        bolsillo_der = (r_hip[0], r_hip[1] + offset_y)
+
+                        cv2.putText(frame, "MODO LATERAL",
+                                    (DISP_W - 200, Y_LINEA_1), fuente, F_MEDIO, (255, 100, 0), GROSOR_HUD, suavizado)
 
                     else:
-                        cv2.circle(frame, (wx_d, wy_d), 6, (0, 255, 0), -1)
+                        min_x_torso = centro_x - (distancia_hombros * 0.35)
+                        max_x_torso = centro_x + (distancia_hombros * 0.35)
+                        min_y_torso = min(l_sh[1], r_sh[1]) + (dist_hombro_cadera * 0.4)
+                        max_y_torso = max(l_hip[1], r_hip[1]) - 10
+                        bolsillo_izq = (l_hip[0], l_hip[1] + offset_y)
+                        bolsillo_der = (r_hip[0], r_hip[1] + offset_y)
+
+                    if min_x_torso > 0 and min_y_torso > 0:
+                        cv2.rectangle(frame,
+                                    (int(min_x_torso * ESCALA_X), int(min_y_torso * ESCALA_Y)),
+                                    (int(max_x_torso * ESCALA_X), int(max_y_torso * ESCALA_Y)),
+                                    (255, 255, 255), 1)
+                        cv2.circle(frame,
+                                (int(bolsillo_izq[0] * ESCALA_X), int(bolsillo_izq[1] * ESCALA_Y)),
+                                int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
+                        cv2.circle(frame,
+                                (int(bolsillo_der[0] * ESCALA_X), int(bolsillo_der[1] * ESCALA_Y)),
+                                int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
+
+                    for wrist, wrist_ok in [(l_wrist, muneca_izq_ok), (r_wrist, muneca_der_ok)]:
+                        wx, wy = wrist
+
+                        if wx <= 0 or wy <= 0 or not wrist_ok:
+                            continue
+
+                        en_estante  = colision_cajas([wx-15, wy-15, wx+15, wy+15], ROI_INF)
+                        en_torso    = (min_x_torso <= wx <= max_x_torso and
+                                    min_y_torso <= wy <= max_y_torso)
+                        en_bolsillo = (math.hypot(wx - bolsillo_izq[0], wy - bolsillo_izq[1]) < radio_bolsillo or
+                                    math.hypot(wx - bolsillo_der[0], wy - bolsillo_der[1]) < radio_bolsillo)
+
+                        wx_d = int(wx * ESCALA_X)
+                        wy_d = int(wy * ESCALA_Y)
+
+                        if en_estante:
+                            memoria_toco_estante = True
+                            frames_sin_faltante  = 0
+                            cv2.circle(frame, (wx_d, wy_d), 8, (255, 0, 255), -1)
+
+                        elif en_torso or en_bolsillo:
+                            if memoria_toco_estante and faltante_en_estante and not botella_visible_fuera:
+                                manos_en_peligro = True
+                                cv2.circle(frame, (wx_d, wy_d), 8, (0, 0, 255), -1)
+                            else:
+                                cv2.circle(frame, (wx_d, wy_d), 6, (255, 255, 0), -1)
+
+                        else:
+                            cv2.circle(frame, (wx_d, wy_d), 6, (0, 255, 0), -1)
 
             if manos_en_peligro:
                 frames_ocultamiento_confirmado += 1

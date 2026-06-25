@@ -79,10 +79,10 @@ app.add_middleware(
 )
 
 # ==========================================
-# CONFIGURACIÓN DEL BOT DE TELEGRAM
+# CONFIGURACIÓN DEL BOT DE TELEGRAM (CONFIGURACIÓN DE DEFENSA)
 # ==========================================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = "8848721200:AAGbvjLg51ng6CLxpatz7pnAbvteHg3JN1k"
+TELEGRAM_CHAT_ID = "-1003790783396"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # ==========================================
@@ -147,18 +147,25 @@ def procesar_y_despachar_sospecha(frame_evidencia):
     global ultimo_disparo
     print("[EDGE] Despachando sospecha biometrica local...")
     try:
+        print("[EDGE] Paso 1: Codificando imagen...")
         ret, buffer = cv2.imencode('.jpg', frame_evidencia)
-        if not ret: return
+        if not ret:
+            print("[EDGE] ERROR: No se pudo codificar la imagen")
+            return
         imagen_bytes = buffer.tobytes()
-
         firma_sha256 = hashlib.sha256(imagen_bytes).hexdigest()
-
         nombre_archivo = f"evidencia_{int(time.time())}.jpg"
         bucket_name = "evidencia_biometrica"
-        
-        supabase.storage.from_(bucket_name).upload(nombre_archivo, imagen_bytes, {"content-type": "image/jpeg"})
+
+        print(f"[EDGE] Paso 2: Subiendo a Supabase Storage -> {nombre_archivo}")
+        upload_res = supabase.storage.from_(bucket_name).upload(
+            nombre_archivo, imagen_bytes, {"content-type": "image/jpeg"}
+        )
+        print(f"[EDGE] Supabase upload OK: {upload_res}")
+
         imagen_url = supabase.storage.from_(bucket_name).get_public_url(nombre_archivo)
-        
+        print(f"[EDGE] Paso 3: URL obtenida: {imagen_url}")
+
         alerta_data = {
             "camara_id": 1,
             "etiqueta": "SOSPECHA DE OCULTAMIENTO",
@@ -172,36 +179,45 @@ def procesar_y_despachar_sospecha(frame_evidencia):
                 "sha256_hash": firma_sha256
             }
         }
-        
+
+        print("[EDGE] Paso 4: Insertando en Supabase DB...")
         res_db = supabase.table("alertas").insert(alerta_data).execute()
         alerta_id = res_db.data[0]['id'] if res_db.data else int(time.time())
+        print(f"[EDGE] DB OK: alerta_id={alerta_id}")
 
         payload_telegram = {
             "chat_id": TELEGRAM_CHAT_ID,
             "caption": f"**SMARTGUARD LIVE** \n\n**Evento:** Alerta Biometrica Local\n**ID Registro:** {alerta_id}\n\nEl sistema Edge detecto que las manos del sujeto interactuaron con el area de riesgo. Valide la intencionalidad:",
             "parse_mode": "Markdown",
             "reply_markup": json.dumps({
-                "inline_keyboard": [
-                    [
-                        {"text": "Riesgo Alto (Robo)", "callback_data": f"alto:{alerta_id}:{nombre_archivo}"},
-                        {"text": "Falsa Alarma", "callback_data": f"falsa:{alerta_id}:{nombre_archivo}"}
-                    ]
-                ]
+                "inline_keyboard": [[
+                    {"text": "Riesgo Alto (Robo)", "callback_data": f"alto:{alerta_id}:{nombre_archivo}"},
+                    {"text": "Falsa Alarma", "callback_data": f"falsa:{alerta_id}:{nombre_archivo}"}
+                ]]
             })
         }
-        
+
+        print(f"[EDGE] Paso 5: Enviando foto a Telegram chat_id={TELEGRAM_CHAT_ID}...")
         url_photo = f"{TELEGRAM_API_URL}/sendPhoto"
-        res_tg = requests.post(url_photo, data=payload_telegram, files={'photo': ('evidencia.jpg', imagen_bytes)})
-        
+        res_tg = requests.post(
+            url_photo,
+            data=payload_telegram,
+            files={'photo': ('evidencia.jpg', imagen_bytes)}
+        )
+        print(f"[EDGE] Telegram respuesta: {res_tg.status_code} | {res_tg.text[:300]}")
+
         if res_tg.status_code == 200:
             tg_data = res_tg.json()
             msg_id = tg_data['result']['message_id']
-            supabase.table("alertas").update({"telegram_message_id": msg_id}).eq("id", alerta_id).execute()
-            print(f"[TELEGRAM] Alerta enviada a Telegram. Message ID registrado: {msg_id}")
+            supabase.table("alertas").update(
+                {"telegram_message_id": msg_id}
+            ).eq("id", alerta_id).execute()
+            print(f"[TELEGRAM] Alerta enviada. Message ID: {msg_id}")
 
     except Exception as e:
+        import traceback
         print(f"[BACKEND] Error al despachar sospecha: {e}")
-
+        print(traceback.format_exc())
 # ==========================================
 # 📐 MOTOR GEOMÉTRICO DE COLISIONES (AABB)
 # ==========================================
@@ -313,80 +329,117 @@ def ejecutar_perfilamiento_forense(alerta_id, nombre_archivo):
 # ==========================================
 def bucle_telegram_polling():
     print("[TELEGRAM BOT] Escuchador interactivo de validacion humana activado.")
-    offset = 0
     global sistema_activo
     
+    # Paso 1: Limpiar cualquier sesion anterior antes de empezar
+    print("[TELEGRAM] Limpiando sesiones anteriores...")
+    for intento in range(5):
+        try:
+            r = requests.get(
+                f"{TELEGRAM_API_URL}/getUpdates",
+                params={"offset": -1, "limit": 1, "timeout": 0},
+                timeout=5
+            )
+            if r.status_code == 200:
+                print("[TELEGRAM] Sesion limpia. Iniciando polling.")
+                break
+            elif r.status_code == 409:
+                print(f"[TELEGRAM] Conflicto detectado, esperando {(intento+1)*3}s...")
+                time.sleep((intento + 1) * 3)
+        except Exception:
+            time.sleep(2)
+
+    offset = 0
     while sistema_activo:
         try:
-            url = f"{TELEGRAM_API_URL}/getUpdates?offset={offset}&timeout=10"
-            res = requests.get(url, timeout=12)
-            if res.status_code != 200:
-                time.sleep(2)
+            res = requests.get(
+                f"{TELEGRAM_API_URL}/getUpdates",
+                params={"offset": offset, "limit": 10, "timeout": 5},
+                timeout=8
+            )
+
+            if res.status_code == 409:
+                print("[TELEGRAM] Conflicto 409 detectado. Esperando 10s y reintentando...")
+                time.sleep(10)
                 continue
-                
+
+            if res.status_code != 200:
+                print(f"⚠️ [TELEGRAM] Error {res.status_code}: {res.text[:100]}")
+                time.sleep(3)
+                continue
+
             updates = res.json().get("result", [])
             for update in updates:
                 offset = update["update_id"] + 1
-                
-                if "callback_query" in update:
-                    cb_query = update["callback_query"]
-                    cb_data = cb_query["data"]
-                    msg_id = cb_query["message"]["message_id"]
-                    chat_id = cb_query["message"]["chat"]["id"]
-                    cb_query_id = cb_query["id"]
-                    
-                    partes = cb_data.split(":")
-                    accion = partes[0]
-                    alerta_id = int(partes[1])
-                    nombre_archivo = partes[2]
-                    
-                    requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_query_id})
-                    
-                    if accion == "alto":
-                        print(f"[TELEGRAM] Guardia reporta RIESGO ALTO para alerta {alerta_id}.")
-                        supabase.table("alertas").update({"estado_validacion": "riesgo_alto"}).eq("id", alerta_id).execute()
-                        
+
+                if "callback_query" not in update:
+                    continue
+
+                cb_query    = update["callback_query"]
+                cb_data     = cb_query["data"]
+                msg_id      = cb_query["message"]["message_id"]
+                chat_id     = cb_query["message"]["chat"]["id"]
+                cb_query_id = cb_query["id"]
+
+                print(f"🖱️ [TELEGRAM] Botón presionado: {cb_data}")
+
+                partes         = cb_data.split(":")
+                accion         = partes[0]
+                alerta_id      = partes[1]
+                nombre_archivo = partes[2]
+
+                requests.post(
+                    f"{TELEGRAM_API_URL}/answerCallbackQuery",
+                    json={"callback_query_id": cb_query_id}
+                )
+
+                if accion == "alto":
+                    print(f"[TELEGRAM] RIESGO ALTO para alerta {alerta_id}.")
+                    supabase.table("alertas").update(
+                        {"estado_validacion": "riesgo_alto"}
+                    ).eq("id", alerta_id).execute()
+
+                    requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "caption": f"*HURTO CONFIRMADO*\n\nEl guardia validó la alerta {alerta_id}.\n_Procesando perfil forense con IA..._",
+                        "parse_mode": "Markdown"
+                    })
+
+                    def hilo_forense():
+                        perfil = ejecutar_perfilamiento_forense(alerta_id, nombre_archivo)
                         requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={
                             "chat_id": chat_id,
                             "message_id": msg_id,
-                            "caption": f"**HURTO CONFIRMADO**\n\nEl guardia valido la alerta {alerta_id}.\n*Procesando perfil forense con Inteligencia Artificial...*"
+                            "caption": perfil,
+                            "parse_mode": "MarkdownV2"
                         })
-                        
-                        def hilo_forense():   
-                            perfil_mdv2 = ejecutar_perfilamiento_forense(alerta_id, nombre_archivo) 
-                            requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={ 
-                                "chat_id": chat_id, 
-                                "message_id": msg_id, 
-                                "caption": perfil_mdv2,
-                                "parse_mode": "MarkdownV2"
-                            })
-                        threading.Thread(target=hilo_forense, daemon=True).start()
-                        
-                    elif accion == "falsa":
-                        print(f"[TELEGRAM] Guardia reporta FALSA ALARMA para alerta {alerta_id}. Aplicando privacidad absoluta.")
-                        supabase.table("alertas").update({
-                            "estado_validacion": "falsa_alarma",
-                            "imagen_url": None
-                        }).eq("id", alerta_id).execute()
-                        
-                        try:
-                            supabase.storage.from_("evidencia_biometrica").remove([nombre_archivo])
-                            print(f"[STORAGE] Archivo {nombre_archivo} eliminado de Supabase Storage de forma definitiva.")
-                        except Exception as storage_err:
-                            print(f"[STORAGE] Advertencia al borrar del storage: {storage_err}")
-                        
-                        url_delete = f"{TELEGRAM_API_URL}/deleteMessage"
-                        res_del = requests.post(url_delete, json={
-                            "chat_id": chat_id,
-                            "message_id": msg_id,
-                        })
-                        
-                        if res_del.status_code == 200:
-                            print(f"[PRIVACIDAD] Mensaje {msg_id} y foto eliminados de Telegram.")
-                        
-            time.sleep(0.5)
+                    threading.Thread(target=hilo_forense, daemon=True).start()
+
+                elif accion == "falsa":
+                    print(f"[TELEGRAM] FALSA ALARMA para alerta {alerta_id}.")
+                    supabase.table("alertas").update({
+                        "estado_validacion": "falsa_alarma",
+                        "imagen_url": None
+                    }).eq("id", alerta_id).execute()
+
+                    try:
+                        supabase.storage.from_("evidencia_biometrica").remove([nombre_archivo])
+                        print(f"[STORAGE] {nombre_archivo} eliminado.")
+                    except Exception as se:
+                        print(f"[STORAGE] Error: {se}")
+
+                    del_res = requests.post(
+                        f"{TELEGRAM_API_URL}/deleteMessage",
+                        json={"chat_id": chat_id, "message_id": msg_id}
+                    )
+                    if del_res.status_code == 200:
+                        print("[PRIVACIDAD] Mensaje eliminado de Telegram.")
+
+            time.sleep(0.3)
+
         except Exception as e:
-            print(f"Error en bucle de polling Telegram: {e}")
+            print(f"❌ [TELEGRAM] Error: {e}")
             time.sleep(3)
 
 # ==========================================
@@ -743,13 +796,52 @@ def bucle_vigilancia():
 
         with lock_frame:
             ultimo_frame_procesado = frame.copy()
-        time.sleep(0.01)
+        time.sleep(0.001)
 
     cap.release()
 
 # ==========================================
 # CONTROL DE CICLO DE VIDA DEL SERVIDOR
 # ==========================================
+
+@app.post("/api/alertas/{alerta_id}/confirmar")
+def confirmar_alerta(alerta_id: str):
+    try:
+        # Obtener nombre del archivo
+        res = supabase.table("alertas").select("metadata").eq("id", alerta_id).execute()
+        nombre_archivo = res.data[0]['metadata']['archivo_storage']
+        
+        supabase.table("alertas").update({"estado_validacion": "riesgo_alto"}).eq("id", alerta_id).execute()
+        
+        # Ejecutar perfil forense en hilo separado
+        def hilo():
+            ejecutar_perfilamiento_forense(alerta_id, nombre_archivo)
+        threading.Thread(target=hilo, daemon=True).start()
+        
+        return {"status": "ok", "mensaje": "Alerta confirmada como robo"}
+    except Exception as e:
+        return {"status": "error", "mensaje": str(e)}
+
+@app.post("/api/alertas/{alerta_id}/descartar")
+def descartar_alerta(alerta_id: str):
+    try:
+        res = supabase.table("alertas").select("metadata").eq("id", alerta_id).execute()
+        nombre_archivo = res.data[0]['metadata']['archivo_storage']
+        
+        # Borrar de Supabase Storage
+        supabase.storage.from_("evidencia_biometrica").remove([nombre_archivo])
+        
+        # Borrar registro de la BD
+        supabase.table("alertas").update({
+            "estado_validacion": "falsa_alarma",
+            "imagen_url": None
+        }).eq("id", alerta_id).execute()
+        
+        return {"status": "ok", "mensaje": "Alerta descartada y foto eliminada"}
+    except Exception as e:
+        return {"status": "error", "mensaje": str(e)}
+
+
 @app.on_event("startup")
 def iniciar_servicios_segundo_plano():
     threading.Thread(target=bucle_vigilancia, daemon=True).start()

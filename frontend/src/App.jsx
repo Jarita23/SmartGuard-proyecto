@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from './supabase'; 
 import Login from './components/Login'; 
-import { Shield, Bell, Camera, CheckCircle, Activity, AlertTriangle, FileText, Smartphone, LogOut, X } from 'lucide-react';
+import { Shield, Bell, Camera, Activity, AlertTriangle, FileText, Smartphone, LogOut, X, CheckCircle, XCircle } from 'lucide-react';
 
-// 🚀 Limpia comillas y barras residuales
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000')
   .replace(/^"|"/g, '')
   .replace(/\/$/, '');
@@ -11,13 +10,12 @@ const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000')
 console.log("📡 SmartGuard conectando al Backend en:", `${API_BASE_URL}/video_feed`);
 
 function App() {
-  const [session, setSession] = useState(null);
+  const [session, setSession]           = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
-  const [alertas, setAlertas] = useState([]);
-  const [loading, setLoading] = useState(true);
-  
-  // Controla si hay una imagen ampliada en pantalla
+  const [alertas, setAlertas]           = useState([]);
+  const [loading, setLoading]           = useState(true);
   const [imagenAmpliada, setImagenAmpliada] = useState(null);
+  const [procesando, setProcesando]     = useState({});  // IDs que están siendo procesados
 
   useEffect(() => {
     const wipeSession = async () => {
@@ -25,46 +23,35 @@ function App() {
       setSession(null);
       setIsAuthLoading(false);
     };
-    
     wipeSession();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
-
     return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (!session) return; 
+    if (!session) return;
 
     const fetchAlertas = async () => {
       const { data } = await supabase
         .from('alertas')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(15);
-      
+        .limit(20);
       setAlertas(data || []);
       setLoading(false);
     };
-
     fetchAlertas();
 
     const channel = supabase
       .channel('schema-db-changes')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'alertas' }, (payload) => {
         setAlertas((current) => [payload.new, ...current]);
-        
-        // 🚀 NUEVO SONIDO: "Pop" tecnológico corregido y permanente
         const audio = new Audio('https://assets.mixkit.co/sfx/preview/mixkit-message-pop-alert-2354.mp3');
         audio.volume = 1.0;
-        
-        audio.play().catch(() => {
-          console.log('🔇 Audio bloqueado por el navegador. Haz un clic en el panel para activar el sonido.');
-        });
+        audio.play().catch(() => {});
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'alertas' }, (payload) => {
         setAlertas((current) => current.map(a => a.id === payload.new.id ? payload.new : a));
@@ -75,10 +62,40 @@ function App() {
       .subscribe();
 
     return () => supabase.removeChannel(channel);
-  }, [session]); 
+  }, [session]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+  };
+
+  // ── CONFIRMAR ROBO ────────────────────────────────────────────
+  const confirmarRobo = async (alerta) => {
+    setProcesando(p => ({ ...p, [alerta.id]: 'alto' }));
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/alertas/${alerta.id}/confirmar`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status !== 'ok') throw new Error(data.mensaje);
+    } catch (e) {
+      console.error('Error al confirmar robo:', e);
+      alert('Error al confirmar: ' + e.message);
+    } finally {
+      setProcesando(p => { const n = {...p}; delete n[alerta.id]; return n; });
+    }
+  };
+
+  // ── DESCARTAR FALSA ALARMA ────────────────────────────────────
+  const descartarAlarma = async (alerta) => {
+    setProcesando(p => ({ ...p, [alerta.id]: 'falsa' }));
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/alertas/${alerta.id}/descartar`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status !== 'ok') throw new Error(data.mensaje);
+    } catch (e) {
+      console.error('Error al descartar:', e);
+      alert('Error al descartar: ' + e.message);
+    } finally {
+      setProcesando(p => { const n = {...p}; delete n[alerta.id]; return n; });
+    }
   };
 
   const alertasVisibles = alertas.filter(a => a.estado_validacion !== 'falsa_alarma');
@@ -94,35 +111,34 @@ function App() {
     );
   }
 
-  if (!session) {
-    return <Login />;
-  }
+  if (!session) return <Login />;
 
   return (
     <div className="min-h-screen bg-[#0a0f18] text-slate-200 font-sans selection:bg-red-500/30">
-      
-      {/* 🚀 MODAL DE IMAGEN PANTALLA COMPLETA */}
+
+      {/* MODAL IMAGEN AMPLIADA */}
       {imagenAmpliada && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm cursor-zoom-out" 
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm cursor-zoom-out"
           onClick={() => setImagenAmpliada(null)}
         >
-          <div className="relative max-w-6xl w-full h-full flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-            <button 
-              onClick={() => setImagenAmpliada(null)} 
+          <div className="relative max-w-6xl w-full h-full flex items-center justify-center" onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => setImagenAmpliada(null)}
               className="absolute top-4 right-4 bg-red-600/80 p-2 rounded-full text-white hover:bg-red-500 transition-colors z-50"
             >
               <X size={24} />
             </button>
-            <img 
-              src={imagenAmpliada} 
-              alt="Evidencia Ampliada" 
-              className="max-w-full max-h-full object-contain rounded-md border border-slate-700 shadow-[0_0_40px_rgba(220,38,38,0.2)]" 
+            <img
+              src={imagenAmpliada}
+              alt="Evidencia Ampliada"
+              className="max-w-full max-h-full object-contain rounded-md border border-slate-700 shadow-[0_0_40px_rgba(220,38,38,0.2)]"
             />
           </div>
         </div>
       )}
 
+      {/* HEADER */}
       <header className="border-b border-slate-800 bg-[#0d131f] p-3 sticky top-0 z-10 flex justify-between items-center shadow-md">
         <div className="flex items-center gap-3 ml-4">
           <div className="bg-red-600 p-1.5 rounded animate-pulse">
@@ -132,17 +148,14 @@ function App() {
             SmartGuard <span className="text-red-500 text-xs font-mono ml-1">EN VIVO</span>
           </h1>
         </div>
-        
         <div className="flex items-center gap-4 text-xs font-medium mr-4">
           <div className="flex items-center gap-1.5 text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-2 py-1 rounded-sm">
             <Activity size={14} /> SEGURO
           </div>
           <div className="text-slate-500 uppercase tracking-widest font-mono">TALCA</div>
-          
-          <button 
+          <button
             onClick={handleLogout}
             className="flex items-center gap-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 px-2 py-1 rounded-sm transition-colors ml-2"
-            title="Desconectar Operador"
           >
             <LogOut size={14} />
             <span className="hidden md:inline uppercase tracking-widest font-mono text-[10px]">Salir</span>
@@ -151,7 +164,8 @@ function App() {
       </header>
 
       <main className="p-4 grid grid-cols-1 lg:grid-cols-4 gap-4">
-        
+
+        {/* VIDEO */}
         <div className="lg:col-span-3 flex flex-col gap-4">
           <div className="bg-[#0d131f] rounded-sm border border-slate-800 shadow-lg overflow-hidden">
             <div className="px-3 py-2 border-b border-slate-800 flex justify-between items-center bg-black/40">
@@ -164,19 +178,18 @@ function App() {
                 <span className="bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm animate-pulse tracking-widest">REC</span>
               </div>
             </div>
-            
             <div className="aspect-video bg-black relative group flex items-center justify-center">
-              {/* 🚀 Enlace limpio, sin brackets */}
               <div className="absolute inset-0 opacity-10 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]"></div>
-              <img 
-                src={`${API_BASE_URL}/video_feed`} 
-                alt="Feed CAM-01" 
-                className="w-full h-full object-contain relative z-10" 
+              <img
+                src={`${API_BASE_URL}/video_feed`}
+                alt="Feed CAM-01"
+                className="w-full h-full object-contain relative z-10"
               />
             </div>
           </div>
         </div>
 
+        {/* PANEL ALERTAS */}
         <div className="bg-[#0d131f] border border-slate-800 rounded-sm flex flex-col shadow-lg overflow-hidden lg:h-[calc(100vh-100px)]">
           <div className="p-3 border-b border-slate-800 bg-black/40 flex items-center justify-between">
             <h2 className="text-sm font-bold flex items-center gap-2 uppercase tracking-wide">
@@ -197,15 +210,16 @@ function App() {
               </div>
             ) : (
               alertasVisibles.map((alerta) => (
-                <div 
-                  key={alerta.id} 
+                <div
+                  key={alerta.id}
                   className={`rounded-sm border transition-all duration-300 ${
-                    alerta.estado_validacion === 'riesgo_alto' 
-                    ? 'bg-red-950/20 border-red-900 shadow-md' 
-                    : 'bg-slate-900 border-slate-700'
+                    alerta.estado_validacion === 'riesgo_alto'
+                      ? 'bg-red-950/20 border-red-900 shadow-md'
+                      : 'bg-slate-900 border-slate-700'
                   }`}
                 >
                   <div className="p-3">
+                    {/* ENCABEZADO */}
                     <div className="flex justify-between items-start mb-1.5">
                       <div className="flex items-center gap-2">
                         <AlertTriangle size={14} className={alerta.estado_validacion === 'riesgo_alto' ? 'text-red-500' : 'text-amber-500'} />
@@ -216,50 +230,81 @@ function App() {
                         </span>
                       </div>
                       <span className="text-[10px] text-slate-400 font-mono">
-                        {new Date(alerta.created_at).toLocaleTimeString('es-CL', {hour12: false})}
+                        {new Date(alerta.created_at).toLocaleTimeString('es-CL', { hour12: false })}
                       </span>
                     </div>
-                    
-                    <h3 className="font-bold text-sm text-slate-200 mt-2">{alerta.etiqueta}</h3>
-                    <p className="text-xs text-slate-400 mt-1 line-clamp-2">
-                      {alerta.descripcion}
-                    </p>
 
+                    <h3 className="font-bold text-sm text-slate-200 mt-2">{alerta.etiqueta}</h3>
+                    <p className="text-xs text-slate-400 mt-1 line-clamp-2">{alerta.descripcion}</p>
+
+                    {/* IMAGEN PARA EVALUAR (siempre visible si hay URL) */}
+                    {alerta.imagen_url && (
+                      <div className="mt-3 aspect-video bg-slate-950 border border-slate-800 rounded-sm relative overflow-hidden group cursor-pointer"
+                        onClick={() => setImagenAmpliada(alerta.imagen_url)}
+                      >
+                        <img
+                          src={alerta.imagen_url}
+                          alt="Evidencia"
+                          className="w-full h-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-300">
+                          <span className="bg-black/70 text-white text-[10px] px-2 py-1 rounded border border-slate-600 backdrop-blur-sm">CLICK PARA AMPLIAR</span>
+                        </div>
+                        <div className="absolute bottom-1 right-1 bg-black/80 px-1.5 py-0.5 border border-slate-700 rounded-sm">
+                          <span className="text-[8px] font-mono text-slate-400">EVIDENCIA.JPG</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* BOTONES DE DECISIÓN (solo si está pendiente) */}
                     {alerta.estado_validacion === 'pendiente' && (
-                      <div className="mt-3 pt-3 border-t border-slate-800 flex items-center justify-center gap-2 text-slate-500 bg-slate-950/50 p-2 rounded-sm">
+                      <div className="mt-3 pt-3 border-t border-slate-800 grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => confirmarRobo(alerta)}
+                          disabled={!!procesando[alerta.id]}
+                          className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[10px] font-bold px-2 py-2 rounded-sm uppercase tracking-wider transition-colors"
+                        >
+                          <CheckCircle size={12} />
+                          {procesando[alerta.id] === 'alto' ? 'Procesando...' : 'Riesgo Alto (Robo)'}
+                        </button>
+                        <button
+                          onClick={() => descartarAlarma(alerta)}
+                          disabled={!!procesando[alerta.id]}
+                          className="flex items-center justify-center gap-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-200 text-[10px] font-bold px-2 py-2 rounded-sm uppercase tracking-wider transition-colors"
+                        >
+                          <XCircle size={12} />
+                          {procesando[alerta.id] === 'falsa' ? 'Eliminando...' : 'Falsa Alarma'}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* ESPERANDO (si no tiene imagen aún) */}
+                    {alerta.estado_validacion === 'pendiente' && !alerta.imagen_url && (
+                      <div className="mt-2 flex items-center justify-center gap-2 text-slate-500 bg-slate-950/50 p-2 rounded-sm">
                         <Smartphone size={14} className="animate-pulse text-amber-500" />
-                        <span className="text-[9px] uppercase tracking-widest font-mono">Esperando decisión en Telegram...</span>
+                        <span className="text-[9px] uppercase tracking-widest font-mono">Cargando evidencia...</span>
                       </div>
                     )}
                   </div>
 
-                  {alerta.estado_validacion === 'riesgo_alto' && (
+                  {/* PERFIL FORENSE (solo en robo confirmado) */}
+                  {alerta.estado_validacion === 'riesgo_alto' && alerta.descripcion_ia && (
                     <div className="bg-black/50 border-t border-red-900/50 p-3">
-                      <div className="aspect-video bg-slate-900 border border-slate-800 rounded-sm mb-3 relative overflow-hidden group">
-                        {/* 🚀 Enlace de imagen limpio */}
-                        <img 
-                          src={alerta.imagen_url || "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=400"} 
-                          alt="Evidencia Forense" 
-                          onClick={() => setImagenAmpliada(alerta.imagen_url)}
-                          className="w-full h-full object-cover opacity-80 cursor-pointer group-hover:opacity-100 group-hover:scale-105 transition-all duration-500"
-                        />
-                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-300">
-                           <span className="bg-black/70 text-white text-[10px] px-2 py-1 rounded border border-slate-600 backdrop-blur-sm">CLICK PARA AMPLIAR</span>
-                        </div>
-                        <div className="absolute bottom-1 right-1 bg-black/80 px-1.5 py-0.5 border border-slate-700 rounded-sm">
-                          <span className="text-[8px] font-mono text-slate-400">EVIDENCIA</span>
-                        </div>
-                      </div>
-
                       <div className="bg-slate-900 border-l-2 border-red-500 p-2.5 rounded-r-sm">
                         <div className="flex items-center gap-1.5 mb-2">
                           <FileText size={12} className="text-slate-400" />
-                          <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Perfil Forense </span>
+                          <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Perfil Forense IA</span>
                         </div>
                         <p className="text-[11px] text-slate-300 leading-relaxed font-mono whitespace-pre-line">
-                          {alerta.descripcion_ia || "Generando perfil forense desde la nube..."}
+                          {alerta.descripcion_ia}
                         </p>
                       </div>
+                    </div>
+                  )}
+
+                  {alerta.estado_validacion === 'riesgo_alto' && !alerta.descripcion_ia && (
+                    <div className="bg-black/50 border-t border-red-900/50 p-3">
+                      <p className="text-[10px] text-slate-500 font-mono animate-pulse">Generando perfil forense con IA...</p>
                     </div>
                   )}
                 </div>

@@ -38,7 +38,7 @@ load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 print(f"[SISTEMA] Archivo .env forzado desde: {ENV_PATH}")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
@@ -79,7 +79,7 @@ app.add_middleware(
 )
 
 # ==========================================
-# CONFIGURACIÓN DEL BOT DE TELEGRAM (CONFIGURACIÓN DE DEFENSA)
+# CONFIGURACIÓN DEL BOT DE TELEGRAM
 # ==========================================
 TELEGRAM_TOKEN = "8848721200:AAGbvjLg51ng6CLxpatz7pnAbvteHg3JN1k"
 TELEGRAM_CHAT_ID = "-1003790783396"
@@ -114,7 +114,6 @@ class CamaraAsincrona:
             self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
             
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             
@@ -129,7 +128,6 @@ class CamaraAsincrona:
                 if not self.cap.grab():
                     time.sleep(0.01)
                     continue
-                
                 ret, frame = self.cap.retrieve()
                 if ret:
                     self.ret = ret
@@ -218,15 +216,15 @@ def procesar_y_despachar_sospecha(frame_evidencia):
         import traceback
         print(f"[BACKEND] Error al despachar sospecha: {e}")
         print(traceback.format_exc())
+
 # ==========================================
-# 📐 MOTOR GEOMÉTRICO DE COLISIONES (AABB)
+# MOTOR GEOMÉTRICO DE COLISIONES (AABB)
 # ==========================================
 def colision_cajas(box1, box2):
     x_left = max(box1[0], box2[0])
     y_top = max(box1[1], box2[1])
     x_right = min(box1[2], box2[2])
     y_bottom = min(box1[3], box2[3])
-
     if x_right > x_left and y_bottom > y_top:
         return True
     return False
@@ -242,16 +240,15 @@ def escapar_mdv2(texto: str) -> str:
 
 def construir_informe_forense_mdv2(datos_ia: dict, camara_nombre: str) -> str:
     fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    fh_esc = escapar_mdv2(fecha_hora)
-    cam_esc = escapar_mdv2(camara_nombre)
-    gen_esc = escapar_mdv2(datos_ia.get("genero", "N/D"))
+    fh_esc   = escapar_mdv2(fecha_hora)
+    cam_esc  = escapar_mdv2(camara_nombre)
+    gen_esc  = escapar_mdv2(datos_ia.get("genero", "N/D"))
     edad_esc = escapar_mdv2(datos_ia.get("edad", "N/D"))
     rostro_esc = escapar_mdv2(datos_ia.get("rostro", "N/D"))
     psup_esc = escapar_mdv2(datos_ia.get("prenda_superior", "N/D"))
     pinf_esc = escapar_mdv2(datos_ia.get("prenda_inferior", "N/D"))
-    acc_esc = escapar_mdv2(datos_ia.get("accesorios", "Ninguno visible"))
-    evi_esc = escapar_mdv2(datos_ia.get("evidencia", "Ocultamiento detectado"))
+    acc_esc  = escapar_mdv2(datos_ia.get("accesorios", "Ninguno visible"))
+    evi_esc  = escapar_mdv2(datos_ia.get("evidencia", "Ocultamiento detectado"))
     conf_esc = escapar_mdv2(str(datos_ia.get("confianza", "96")))
 
     mensaje = (
@@ -277,10 +274,10 @@ def construir_informe_forense_mdv2(datos_ia: dict, camara_nombre: str) -> str:
 # CAPA CLOUD FORENSE (GEMINI BAJO DEMANDA)
 # ==========================================
 def ejecutar_perfilamiento_forense(alerta_id, nombre_archivo):
-    print(f"[CLOUD] Activando Gemini para analisis forense estructurado del registro {alerta_id}...") 
-    try:                                          
-        imagen_bytes = supabase.storage.from_("evidencia_biometrica").download(nombre_archivo) 
-        img = PIL.Image.open(io.BytesIO(imagen_bytes)) 
+    print(f"[CLOUD] Activando Gemini para analisis forense del registro {alerta_id}...")
+    try:
+        imagen_bytes = supabase.storage.from_("evidencia_biometrica").download(nombre_archivo)
+        img = PIL.Image.open(io.BytesIO(imagen_bytes))
 
         prompt = """
         Actúa como un perfilador forense de seguridad para supermercados. 
@@ -298,14 +295,13 @@ def ejecutar_perfilamiento_forense(alerta_id, nombre_archivo):
             "confianza": "95"
         }
         No incluyas formato markdown de código (como ```json) en tu respuesta, solo el JSON puro.
-        """                                        
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=[prompt, img]) 
-        
+        """
+        response = client.models.generate_content(model="gemini-2.5-flash", contents=[prompt, img])
         respuesta_cruda = response.text.strip().replace('```json', '').replace('```', '')
         datos_ia = json.loads(respuesta_cruda)
-        
+
         informe_formateado = construir_informe_forense_mdv2(datos_ia, "CAM-01 / Pasillo Principal")
-        
+
         resumen_web = (
             f"👤 {datos_ia.get('genero')} | {datos_ia.get('edad')}\n"
             f"👕 {datos_ia.get('prenda_superior')} | 👖 {datos_ia.get('prenda_inferior')}\n"
@@ -313,134 +309,124 @@ def ejecutar_perfilamiento_forense(alerta_id, nombre_archivo):
             f"🤖 Confianza IA: {datos_ia.get('confianza')}%"
         )
 
-        supabase.table("alertas").update({    
-            "descripcion_ia": resumen_web, 
-            "severidad": "alta"               
-        }).eq("id", alerta_id).execute()      
-        
-        print(f"[CLOUD] Perfil forense MDV2 estructurado con éxito.") 
-        return informe_formateado            
-    except Exception as e:                    
-        print(f"[CLOUD] Error en el perfilamiento forense JSON de Gemini: {e}") 
+        supabase.table("alertas").update({
+            "descripcion_ia": resumen_web,
+            "severidad": "alta"
+        }).eq("id", alerta_id).execute()
+
+        print(f"[CLOUD] Perfil forense estructurado con éxito.")
+        return informe_formateado
+    except Exception as e:
+        print(f"[CLOUD] Error en el perfilamiento forense de Gemini: {e}")
         return r"🔴 *ERROR FORENSE* \nNo se pudo estructurar la lectura biométrica\."
 
 # ==========================================
-# HILO TELEGRAM INTERACTIVE POLLING (HITL)
+# WEBHOOK TELEGRAM (reemplaza el polling)
+# Sin 409, sin conflictos entre instancias
+# ==========================================
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    try:
+        update = await request.json()
+        print(f"[WEBHOOK] Update recibido")
+
+        if "callback_query" not in update:
+            return {"ok": True}
+
+        cb_query    = update["callback_query"]
+        cb_data     = cb_query["data"]
+        msg_id      = cb_query["message"]["message_id"]
+        chat_id     = cb_query["message"]["chat"]["id"]
+        cb_query_id = cb_query["id"]
+
+        print(f"🖱️ [WEBHOOK] Botón presionado: {cb_data}")
+
+        partes         = cb_data.split(":")
+        accion         = partes[0]
+        alerta_id      = partes[1]
+        nombre_archivo = partes[2]
+
+        # Apagar el relojito de carga en el celular
+        requests.post(
+            f"{TELEGRAM_API_URL}/answerCallbackQuery",
+            json={"callback_query_id": cb_query_id}
+        )
+
+        if accion == "alto":
+            print(f"[WEBHOOK] RIESGO ALTO para alerta {alerta_id}")
+            supabase.table("alertas").update(
+                {"estado_validacion": "riesgo_alto"}
+            ).eq("id", alerta_id).execute()
+
+            requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "caption": f"*HURTO CONFIRMADO*\n\nGuardia validó alerta {alerta_id}\\.\n_Procesando perfil forense con IA\\.\\.\\._",
+                "parse_mode": "MarkdownV2"
+            })
+
+            def hilo_forense():
+                perfil = ejecutar_perfilamiento_forense(alerta_id, nombre_archivo)
+                requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                    "caption": perfil,
+                    "parse_mode": "MarkdownV2"
+                })
+            threading.Thread(target=hilo_forense, daemon=True).start()
+
+        elif accion == "falsa":
+            print(f"[WEBHOOK] FALSA ALARMA para alerta {alerta_id}")
+            supabase.table("alertas").update({
+                "estado_validacion": "falsa_alarma",
+                "imagen_url": None
+            }).eq("id", alerta_id).execute()
+
+            try:
+                supabase.storage.from_("evidencia_biometrica").remove([nombre_archivo])
+                print(f"[STORAGE] {nombre_archivo} eliminado permanentemente.")
+            except Exception as e:
+                print(f"[STORAGE] Error: {e}")
+
+            del_res = requests.post(
+                f"{TELEGRAM_API_URL}/deleteMessage",
+                json={"chat_id": chat_id, "message_id": msg_id}
+            )
+            if del_res.status_code == 200:
+                print("[PRIVACIDAD] Mensaje y foto eliminados de Telegram.")
+
+        return {"ok": True}
+
+    except Exception as e:
+        import traceback
+        print(f"[WEBHOOK ERROR] {e}\n{traceback.format_exc()}")
+        return {"ok": False}
+
+# ==========================================
+# REGISTRO DEL WEBHOOK (reemplaza el polling)
 # ==========================================
 def bucle_telegram_polling():
-    print("[TELEGRAM BOT] Escuchador interactivo de validacion humana activado.")
-    global sistema_activo
-    
-    # Paso 1: Limpiar cualquier sesion anterior antes de empezar
-    print("[TELEGRAM] Limpiando sesiones anteriores...")
-    for intento in range(5):
-        try:
-            r = requests.get(
-                f"{TELEGRAM_API_URL}/getUpdates",
-                params={"offset": -1, "limit": 1, "timeout": 0},
-                timeout=5
-            )
-            if r.status_code == 200:
-                print("[TELEGRAM] Sesion limpia. Iniciando polling.")
-                break
-            elif r.status_code == 409:
-                print(f"[TELEGRAM] Conflicto detectado, esperando {(intento+1)*3}s...")
-                time.sleep((intento + 1) * 3)
-        except Exception:
-            time.sleep(2)
+    print("[WEBHOOK] Registrando webhook en Telegram...")
+    time.sleep(4)  # Esperar que el servidor arranque completamente
 
-    offset = 0
-    while sistema_activo:
-        try:
-            res = requests.get(
-                f"{TELEGRAM_API_URL}/getUpdates",
-                params={"offset": offset, "limit": 10, "timeout": 5},
-                timeout=8
-            )
+    CLOUDFLARE_URL = "https://machinery-phillips-tokyo-bryant.trycloudflare.com"
+    webhook_url = f"{CLOUDFLARE_URL}/webhook"
 
-            if res.status_code == 409:
-                print("[TELEGRAM] Conflicto 409 detectado. Esperando 10s y reintentando...")
-                time.sleep(10)
-                continue
+    # Limpiar cualquier configuración anterior
+    requests.get(f"{TELEGRAM_API_URL}/deleteWebhook?drop_pending_updates=true")
+    time.sleep(2)
 
-            if res.status_code != 200:
-                print(f"⚠️ [TELEGRAM] Error {res.status_code}: {res.text[:100]}")
-                time.sleep(3)
-                continue
+    res = requests.post(f"{TELEGRAM_API_URL}/setWebhook", json={
+        "url": webhook_url,
+        "allowed_updates": ["callback_query", "message"],
+        "drop_pending_updates": True
+    })
 
-            updates = res.json().get("result", [])
-            for update in updates:
-                offset = update["update_id"] + 1
-
-                if "callback_query" not in update:
-                    continue
-
-                cb_query    = update["callback_query"]
-                cb_data     = cb_query["data"]
-                msg_id      = cb_query["message"]["message_id"]
-                chat_id     = cb_query["message"]["chat"]["id"]
-                cb_query_id = cb_query["id"]
-
-                print(f"🖱️ [TELEGRAM] Botón presionado: {cb_data}")
-
-                partes         = cb_data.split(":")
-                accion         = partes[0]
-                alerta_id      = partes[1]
-                nombre_archivo = partes[2]
-
-                requests.post(
-                    f"{TELEGRAM_API_URL}/answerCallbackQuery",
-                    json={"callback_query_id": cb_query_id}
-                )
-
-                if accion == "alto":
-                    print(f"[TELEGRAM] RIESGO ALTO para alerta {alerta_id}.")
-                    supabase.table("alertas").update(
-                        {"estado_validacion": "riesgo_alto"}
-                    ).eq("id", alerta_id).execute()
-
-                    requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={
-                        "chat_id": chat_id,
-                        "message_id": msg_id,
-                        "caption": f"*HURTO CONFIRMADO*\n\nEl guardia validó la alerta {alerta_id}.\n_Procesando perfil forense con IA..._",
-                        "parse_mode": "Markdown"
-                    })
-
-                    def hilo_forense():
-                        perfil = ejecutar_perfilamiento_forense(alerta_id, nombre_archivo)
-                        requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={
-                            "chat_id": chat_id,
-                            "message_id": msg_id,
-                            "caption": perfil,
-                            "parse_mode": "MarkdownV2"
-                        })
-                    threading.Thread(target=hilo_forense, daemon=True).start()
-
-                elif accion == "falsa":
-                    print(f"[TELEGRAM] FALSA ALARMA para alerta {alerta_id}.")
-                    supabase.table("alertas").update({
-                        "estado_validacion": "falsa_alarma",
-                        "imagen_url": None
-                    }).eq("id", alerta_id).execute()
-
-                    try:
-                        supabase.storage.from_("evidencia_biometrica").remove([nombre_archivo])
-                        print(f"[STORAGE] {nombre_archivo} eliminado.")
-                    except Exception as se:
-                        print(f"[STORAGE] Error: {se}")
-
-                    del_res = requests.post(
-                        f"{TELEGRAM_API_URL}/deleteMessage",
-                        json={"chat_id": chat_id, "message_id": msg_id}
-                    )
-                    if del_res.status_code == 200:
-                        print("[PRIVACIDAD] Mensaje eliminado de Telegram.")
-
-            time.sleep(0.3)
-
-        except Exception as e:
-            print(f"❌ [TELEGRAM] Error: {e}")
-            time.sleep(3)
+    if res.json().get("ok"):
+        print(f"[WEBHOOK] ✅ Registrado exitosamente en: {webhook_url}")
+        print(f"[WEBHOOK] Los botones de Telegram ahora funcionan sin polling.")
+    else:
+        print(f"[WEBHOOK] ❌ Error al registrar: {res.text}")
 
 # ==========================================
 # MOTOR BIOMÉTRICO LOCAL (EDGE) - v7.1
@@ -452,7 +438,7 @@ def bucle_vigilancia():
 
     INF_W, INF_H   = 640, 360
     DISP_W, DISP_H = 1280, 720
-    ESCALA_X = DISP_W / INF_W   
+    ESCALA_X = DISP_W / INF_W
     ESCALA_Y = DISP_H / INF_H
 
     frames_ocultamiento_confirmado = 0
@@ -509,8 +495,8 @@ def bucle_vigilancia():
 
         if frame.shape[1] != DISP_W or frame.shape[0] != DISP_H:
             frame = cv2.resize(frame, (DISP_W, DISP_H))
-            
-        frame_inf = cv2.resize(frame, (INF_W,  INF_H))
+
+        frame_inf = cv2.resize(frame, (INF_W, INF_H))
         FRAME_ACTUAL += 1
 
         if FRAME_ACTUAL < FRAMES_DE_CALENTAMIENTO:
@@ -537,14 +523,14 @@ def bucle_vigilancia():
         if modo_reposicion:
             frames_ocultamiento_confirmado = 0
             frames_analisis_activo_sin_resolucion = 0
-            memoria_toco_estante           = False
-            frames_sin_faltante            = 0
-            stock_estante_congelado        = 0
+            memoria_toco_estante  = False
+            frames_sin_faltante   = 0
+            stock_estante_congelado = 0
             cv2.putText(frame, "MODO REPOSICION: VIGILANCIA PASIVA",
                         (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 140, 255), GROSOR_TITULO, suavizado)
             cv2.rectangle(frame,
-                        (ESTANTE_ROI[0], ESTANTE_ROI[1]),
-                        (ESTANTE_ROI[2], ESTANTE_ROI[3]), (0, 140, 255), 1)
+                          (ESTANTE_ROI[0], ESTANTE_ROI[1]),
+                          (ESTANTE_ROI[2], ESTANTE_ROI[3]), (0, 140, 255), 1)
             with lock_frame:
                 ultimo_frame_procesado = frame.copy()
             time.sleep(0.01)
@@ -634,7 +620,6 @@ def bucle_vigilancia():
                 if r.keypoints is None or len(r.keypoints.xy) == 0:
                     continue
 
-                # REFACTORIZACIÓN MULTIHILO: Iteramos por cada individuo detectado
                 num_personas = len(r.keypoints.xy)
                 for p_idx in range(num_personas):
                     kpts      = r.keypoints.xy[p_idx].cpu().numpy()
@@ -643,9 +628,9 @@ def bucle_vigilancia():
                     if len(kpts) < 13:
                         continue
 
-                    muneca_izq_ok       = kpts_conf[9]  > CONFIANZA_MIN_MUNECA
-                    muneca_der_ok       = kpts_conf[10] > CONFIANZA_MIN_MUNECA
-                    
+                    muneca_izq_ok = kpts_conf[9]  > CONFIANZA_MIN_MUNECA
+                    muneca_der_ok = kpts_conf[10] > CONFIANZA_MIN_MUNECA
+
                     if muneca_izq_ok or muneca_der_ok:
                         esqueleto_confiable = True
 
@@ -665,7 +650,6 @@ def bucle_vigilancia():
                         esta_de_lado = True
                         conf_izq = kpts_conf[5]
                         conf_der = kpts_conf[6]
-
                         ancho_pecho = dist_hombro_cadera * 0.45
 
                         if conf_izq > conf_der:
@@ -679,13 +663,11 @@ def bucle_vigilancia():
 
                         min_y_torso = min(l_sh[1], r_sh[1]) + (dist_hombro_cadera * 0.05)
                         max_y_torso = max(l_hip[1], r_hip[1]) - (dist_hombro_cadera * 0.15)
-
                         bolsillo_izq = (l_hip[0], l_hip[1] + offset_y)
                         bolsillo_der = (r_hip[0], r_hip[1] + offset_y)
 
                         cv2.putText(frame, "MODO LATERAL",
                                     (DISP_W - 200, Y_LINEA_1), fuente, F_MEDIO, (255, 100, 0), GROSOR_HUD, suavizado)
-
                     else:
                         min_x_torso = centro_x - (distancia_hombros * 0.35)
                         max_x_torso = centro_x + (distancia_hombros * 0.35)
@@ -696,15 +678,15 @@ def bucle_vigilancia():
 
                     if min_x_torso > 0 and min_y_torso > 0:
                         cv2.rectangle(frame,
-                                    (int(min_x_torso * ESCALA_X), int(min_y_torso * ESCALA_Y)),
-                                    (int(max_x_torso * ESCALA_X), int(max_y_torso * ESCALA_Y)),
-                                    (255, 255, 255), 1)
+                                      (int(min_x_torso * ESCALA_X), int(min_y_torso * ESCALA_Y)),
+                                      (int(max_x_torso * ESCALA_X), int(max_y_torso * ESCALA_Y)),
+                                      (255, 255, 255), 1)
                         cv2.circle(frame,
-                                (int(bolsillo_izq[0] * ESCALA_X), int(bolsillo_izq[1] * ESCALA_Y)),
-                                int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
+                                   (int(bolsillo_izq[0] * ESCALA_X), int(bolsillo_izq[1] * ESCALA_Y)),
+                                   int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
                         cv2.circle(frame,
-                                (int(bolsillo_der[0] * ESCALA_X), int(bolsillo_der[1] * ESCALA_Y)),
-                                int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
+                                   (int(bolsillo_der[0] * ESCALA_X), int(bolsillo_der[1] * ESCALA_Y)),
+                                   int(radio_bolsillo * ESCALA_X), (0, 165, 255), 1)
 
                     for wrist, wrist_ok in [(l_wrist, muneca_izq_ok), (r_wrist, muneca_der_ok)]:
                         wx, wy = wrist
@@ -714,9 +696,9 @@ def bucle_vigilancia():
 
                         en_estante  = colision_cajas([wx-15, wy-15, wx+15, wy+15], ROI_INF)
                         en_torso    = (min_x_torso <= wx <= max_x_torso and
-                                    min_y_torso <= wy <= max_y_torso)
+                                       min_y_torso <= wy <= max_y_torso)
                         en_bolsillo = (math.hypot(wx - bolsillo_izq[0], wy - bolsillo_izq[1]) < radio_bolsillo or
-                                    math.hypot(wx - bolsillo_der[0], wy - bolsillo_der[1]) < radio_bolsillo)
+                                       math.hypot(wx - bolsillo_der[0], wy - bolsillo_der[1]) < radio_bolsillo)
 
                         wx_d = int(wx * ESCALA_X)
                         wy_d = int(wy * ESCALA_Y)
@@ -725,14 +707,12 @@ def bucle_vigilancia():
                             memoria_toco_estante = True
                             frames_sin_faltante  = 0
                             cv2.circle(frame, (wx_d, wy_d), 8, (255, 0, 255), -1)
-
                         elif en_torso or en_bolsillo:
                             if memoria_toco_estante and faltante_en_estante and not botella_visible_fuera:
                                 manos_en_peligro = True
                                 cv2.circle(frame, (wx_d, wy_d), 8, (0, 0, 255), -1)
                             else:
                                 cv2.circle(frame, (wx_d, wy_d), 6, (255, 255, 0), -1)
-
                         else:
                             cv2.circle(frame, (wx_d, wy_d), 6, (0, 255, 0), -1)
 
@@ -742,20 +722,19 @@ def bucle_vigilancia():
                 cv2.putText(frame,
                             f"ALERTA HURTO ({frames_ocultamiento_confirmado}/{UMBRAL_GATILLO})",
                             (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 0, 255), GROSOR_TITULO, suavizado)
-
             else:
                 frames_ocultamiento_confirmado = max(0, frames_ocultamiento_confirmado - 2)
 
                 if faltante_en_estante and not botella_visible_fuera and memoria_toco_estante:
                     frames_analisis_activo_sin_resolucion += 1
-                    cv2.putText(frame, f"ANALISIS CIEGO: BUSCANDO MANOS ({frames_analisis_activo_sin_resolucion}/{UMBRAL_GATILLO_CIEGO})",
+                    cv2.putText(frame,
+                                f"ANALISIS CIEGO: BUSCANDO MANOS ({frames_analisis_activo_sin_resolucion}/{UMBRAL_GATILLO_CIEGO})",
                                 (X_TEXTO, Y_LINEA_1), fuente, F_GRANDE, (0, 165, 255), GROSOR_HUD, suavizado)
-                    
+
                     if frames_analisis_activo_sin_resolucion >= UMBRAL_GATILLO_CIEGO:
-                        print("[GATILLO CIEGO] Tiempo limite alcanzado de espaldas al estante. Forzando alerta.")
-                        frames_ocultamiento_confirmado = UMBRAL_GATILLO  
+                        print("[GATILLO CIEGO] Tiempo limite. Forzando alerta.")
+                        frames_ocultamiento_confirmado = UMBRAL_GATILLO
                         frames_analisis_activo_sin_resolucion = 0
-                
                 else:
                     frames_analisis_activo_sin_resolucion = 0
 
@@ -790,9 +769,9 @@ def bucle_vigilancia():
             frames_ocultamiento_confirmado = 0
 
         cv2.rectangle(frame,
-                    (ESTANTE_ROI[0], ESTANTE_ROI[1]),
-                    (ESTANTE_ROI[2], ESTANTE_ROI[3]),
-                    (255, 255, 0), 1)
+                      (ESTANTE_ROI[0], ESTANTE_ROI[1]),
+                      (ESTANTE_ROI[2], ESTANTE_ROI[3]),
+                      (255, 255, 0), 1)
 
         with lock_frame:
             ultimo_frame_procesado = frame.copy()
@@ -803,21 +782,35 @@ def bucle_vigilancia():
 # ==========================================
 # CONTROL DE CICLO DE VIDA DEL SERVIDOR
 # ==========================================
-
 @app.post("/api/alertas/{alerta_id}/confirmar")
 def confirmar_alerta(alerta_id: str):
     try:
-        # Obtener nombre del archivo
-        res = supabase.table("alertas").select("metadata").eq("id", alerta_id).execute()
+        res = supabase.table("alertas").select("metadata, telegram_message_id").eq("id", alerta_id).execute()
         nombre_archivo = res.data[0]['metadata']['archivo_storage']
-        
+        msg_id = res.data[0].get('telegram_message_id')
+
         supabase.table("alertas").update({"estado_validacion": "riesgo_alto"}).eq("id", alerta_id).execute()
-        
-        # Ejecutar perfil forense en hilo separado
+
+        # Avisar a Telegram
+        if msg_id:
+            requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "message_id": msg_id,
+                "caption": f"*HURTO CONFIRMADO desde Dashboard*\n\nOperador validó alerta {alerta_id}\\.\n_Procesando perfil forense con IA\\.\\.\\._",
+                "parse_mode": "MarkdownV2"
+            })
+
         def hilo():
-            ejecutar_perfilamiento_forense(alerta_id, nombre_archivo)
+            perfil = ejecutar_perfilamiento_forense(alerta_id, nombre_archivo)
+            if msg_id:
+                requests.post(f"{TELEGRAM_API_URL}/editMessageCaption", json={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "message_id": msg_id,
+                    "caption": perfil,
+                    "parse_mode": "MarkdownV2"
+                })
         threading.Thread(target=hilo, daemon=True).start()
-        
+
         return {"status": "ok", "mensaje": "Alerta confirmada como robo"}
     except Exception as e:
         return {"status": "error", "mensaje": str(e)}
@@ -825,22 +818,27 @@ def confirmar_alerta(alerta_id: str):
 @app.post("/api/alertas/{alerta_id}/descartar")
 def descartar_alerta(alerta_id: str):
     try:
-        res = supabase.table("alertas").select("metadata").eq("id", alerta_id).execute()
+        res = supabase.table("alertas").select("metadata, telegram_message_id").eq("id", alerta_id).execute()
         nombre_archivo = res.data[0]['metadata']['archivo_storage']
-        
-        # Borrar de Supabase Storage
+        msg_id = res.data[0].get('telegram_message_id')
+
         supabase.storage.from_("evidencia_biometrica").remove([nombre_archivo])
-        
-        # Borrar registro de la BD
         supabase.table("alertas").update({
             "estado_validacion": "falsa_alarma",
             "imagen_url": None
         }).eq("id", alerta_id).execute()
-        
+
+        # Eliminar mensaje de Telegram
+        if msg_id:
+            requests.post(f"{TELEGRAM_API_URL}/deleteMessage", json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "message_id": msg_id
+            })
+            print(f"[PRIVACIDAD] Mensaje {msg_id} eliminado de Telegram desde Dashboard.")
+
         return {"status": "ok", "mensaje": "Alerta descartada y foto eliminada"}
     except Exception as e:
         return {"status": "error", "mensaje": str(e)}
-
 
 @app.on_event("startup")
 def iniciar_servicios_segundo_plano():
@@ -858,29 +856,28 @@ def apagar_sistema():
 # ENDPOINTS ADICIONALES LOGÍSTICOS
 # ==========================================
 @app.post("/api/reposicion/toggle")
-def toggle_modo_reposicion():                 
+def toggle_modo_reposicion():
     global modo_reposicion
     modo_reposicion = not modo_reposicion
     return {"status": "success", "modo_reposicion_activo": modo_reposicion}
 
 @app.get("/api/reposicion/status")
-def obtener_estado_reposicion():              
-    global modo_reposicion                    
+def obtener_estado_reposicion():
+    global modo_reposicion
     return {"modo_reposicion_activo": modo_reposicion}
 
 # ==========================================
 # STREAMING ENDPOINT
 # ==========================================
 async def generar_frames_mjpeg():
-    global ultimo_frame_procesado, sistema_activo 
+    global ultimo_frame_procesado, sistema_activo
     try:
         while sistema_activo:
             frame_a_enviar = None
-            
             with lock_frame:
                 if ultimo_frame_procesado is not None:
                     frame_a_enviar = ultimo_frame_procesado.copy()
-            
+
             if frame_a_enviar is None:
                 frame_a_enviar = np.zeros((480, 640, 3), dtype=np.uint8)
                 cv2.putText(frame_a_enviar, "Buscando senal de camara...", (100, 240),
@@ -898,9 +895,9 @@ async def generar_frames_mjpeg():
         pass
 
 @app.get("/video_feed")
-def video_feed():                             
+def video_feed():
     return StreamingResponse(generar_frames_mjpeg(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/")
-def health_check():                           
+def health_check():
     return {"status": "online"}
